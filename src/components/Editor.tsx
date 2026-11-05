@@ -35,7 +35,8 @@ import { cloneEffects, duplicateCut, duplicateEffect, splitCut } from '@/lib/cut
 import { canOverwrite, saveProjectFile, type FileHandleLike } from '@/lib/filesave';
 import { clearAutosave, loadAutosave, saveAutosave, type AutosaveRecord } from '@/lib/autosave';
 import Stage, { type Tool } from './Stage';
-import { BgPanel, BubblePanel, CutPanel, EffectPanel, MAT_DRAG, MaterialPanel } from './Panels';
+import { BgPanel, BubblePanel, CutPanel, EffectPanel, MaterialPanel } from './Panels';
+import { DRAG_BUBBLE, DRAG_MAT, DRAG_SFX, dragLabel, endPanelDrag, panelDragType } from '@/lib/dragkinds';
 import { ExportDialog, HelpDialog, MoreMenu, SheetDialog } from './Dialogs';
 import { SfxPanel } from './SfxPanel';
 
@@ -82,6 +83,8 @@ export default function Editor() {
   const [recover, setRecover] = useState<AutosaveRecord | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [dropActive, setDropActive] = useState(false);
+  /** 패널에서 화면으로 끄는 중: 커서 위치와 놓을 것 이름(웹툰 위가 아니면 ok=false) */
+  const [dragHint, setDragHint] = useState<{ x: number; y: number; label: string; ok: boolean } | null>(null);
   const [focusTick, setFocusTick] = useState(0);
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
@@ -662,11 +665,17 @@ export default function Editor() {
   };
 
   /* ---------- 말풍선 ---------- */
-  const addBubble = (kind: BubbleKind) => {
+  const addBubble = (kind: BubbleKind, at?: { x: number; y: number }) => {
     const { items } = layoutCuts(projectRef.current);
     const target = items.find((i) => i.cut.id === selCutId) ?? items[items.length - 1];
     const y = target ? target.top + 40 : 60;
-    const b = defaultBubble(kind, PAGE_WIDTH / 2 - 120, y);
+    let b = defaultBubble(kind, PAGE_WIDTH / 2 - 120, y);
+    if (at) {
+      // 놓은 곳이 말풍선 가운데가 되게(꼬리도 같이 옮긴다)
+      const dx = Math.round(at.x - (b.x + b.w / 2));
+      const dy = Math.round(at.y - (b.y + b.h / 2));
+      b = { ...b, x: b.x + dx, y: b.y + dy, tailX: b.tailX + dx, tailY: b.tailY + dy };
+    }
     commit((p) => ({ ...p, bubbles: [...p.bubbles, b] }));
     setSelBubbleId(b.id);
     setTool('select');
@@ -675,7 +684,7 @@ export default function Editor() {
 
   /** 글자 의성어를 선택한 컷 가운데쯤에 넣는다(연달아 넣으면 조금씩 비켜서) */
   const sfxCount = useRef(0);
-  const addSfx = (text: string, styleId: string) => {
+  const addSfx = (text: string, styleId: string, at?: { x: number; y: number }) => {
     const { items } = layoutCuts(projectRef.current);
     const target = items.find((i) => i.cut.id === selCutRef.current) ?? items[items.length - 1];
     if (!target) return say('먼저 컷을 추가하세요');
@@ -684,8 +693,8 @@ export default function Editor() {
     let b = defaultSfx(0, 0, text, { h });
     b = applySfxPreset(b, presetById(styleId));
     b = fitBubble({ ...b, h });
-    const x = Math.round(PAGE_WIDTH / 2 - b.w / 2 + (n - 2) * 40);
-    const y = Math.round(target.top + target.cut.height / 2 - b.h / 2 + (n - 2) * 30);
+    const x = Math.round(at ? at.x - b.w / 2 : PAGE_WIDTH / 2 - b.w / 2 + (n - 2) * 40);
+    const y = Math.round(at ? at.y - b.h / 2 : target.top + target.cut.height / 2 - b.h / 2 + (n - 2) * 30);
     b = { ...b, x, y, tailX: x, tailY: y };
     commit((p) => ({ ...p, bubbles: [...p.bubbles, b] }));
     setSelBubbleId(b.id);
@@ -1062,11 +1071,15 @@ export default function Editor() {
   }, []);
 
   const hasFiles = (e: RDragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
-  const hasMat = (e: RDragEvent) => Array.from(e.dataTransfer?.types ?? []).includes(MAT_DRAG);
   const onAppDragOver = (e: RDragEvent) => {
-    if (hasMat(e)) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
+    if (panelDragType(e.dataTransfer?.types)) {
+      const at = clientToPage(e.clientX, e.clientY);
+      if (at) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      } else e.dataTransfer.dropEffect = 'none';
+      const label = dragLabel() || '소재';
+      setDragHint((h) => (h && h.x === e.clientX && h.y === e.clientY && h.ok === !!at ? h : { x: e.clientX, y: e.clientY, label, ok: !!at }));
       return;
     }
     if (!hasFiles(e)) return;
@@ -1078,13 +1091,27 @@ export default function Editor() {
   };
   const onAppDrop = (e: RDragEvent) => {
     setDropActive(false);
-    if (hasMat(e)) {
+    const kind = panelDragType(e.dataTransfer?.types);
+    if (kind) {
       e.preventDefault();
-      const m = allMaterials.find((x) => x.id === e.dataTransfer.getData(MAT_DRAG));
+      setDragHint(null);
+      endPanelDrag();
       const at = clientToPage(e.clientX, e.clientY);
-      if (!m) return;
-      if (!at) return say('소재는 웹툰 화면 위에 놓아 주세요');
-      void materialToPage(m, at);
+      if (!at) return say('웹툰 화면 위에 놓아 주세요');
+      const data = e.dataTransfer.getData(kind);
+      if (kind === DRAG_MAT) {
+        const m = allMaterials.find((x) => x.id === data);
+        if (m) void materialToPage(m, at);
+      } else if (kind === DRAG_SFX) {
+        try {
+          const { text, style } = JSON.parse(data) as { text: string; style: string };
+          addSfx(text, style, at);
+        } catch {
+          /* 잘못된 데이터는 무시 */
+        }
+      } else if (kind === DRAG_BUBBLE) {
+        addBubble(data as BubbleKind, at);
+      }
       return;
     }
     if (e.defaultPrevented || !hasFiles(e)) return; // 소재 칸·빈 화면은 자기 처리를 한다
@@ -1157,6 +1184,25 @@ export default function Editor() {
   /* ---------- 말풍선·의성어가 쓰는 글꼴을 화면에 불러온다 ---------- */
   useEffect(() => ensureFontsForBubbles(project.bubbles), [project.bubbles]);
 
+  /* ---------- 패널에서 끌기를 취소했을 때 안내를 지운다 ---------- */
+  useEffect(() => {
+    const clear = () => {
+      setDragHint(null);
+      endPanelDrag();
+    };
+    const leave = (e: DragEvent) => {
+      if (!e.relatedTarget) setDragHint(null);
+    };
+    window.addEventListener('dragend', clear);
+    window.addEventListener('drop', clear);
+    document.addEventListener('dragleave', leave);
+    return () => {
+      window.removeEventListener('dragend', clear);
+      window.removeEventListener('drop', clear);
+      document.removeEventListener('dragleave', leave);
+    };
+  }, []);
+
   /* ---------- 첫 컷을 올리면 화면 폭에 맞춘다 ---------- */
   const hadCuts = useRef(false);
   useEffect(() => {
@@ -1213,7 +1259,7 @@ export default function Editor() {
   const activeHint = TOOLS.find((t) => t.id === tool)?.hint;
 
   return (
-    <div className={`app${panning ? ' panning' : ''}`} data-tool={tool} onDragOver={onAppDragOver} onDragLeave={onAppDragLeave} onDrop={onAppDrop}>
+    <div className={`app${panning ? ' panning' : ''}${dragHint?.ok ? ' dropping' : ''}`} data-tool={tool} onDragOver={onAppDragOver} onDragLeave={onAppDragLeave} onDrop={onAppDrop}>
       <header className="topbar">
         <strong className="brand">웹툰 스튜디오</strong>
         <button className="btn primary" onClick={() => fileRef.current?.click()} title="이미지를 컷으로 추가 (끌어다 놓기·붙여넣기도 돼요)">＋ 컷 추가</button>
@@ -1509,6 +1555,11 @@ export default function Editor() {
           )}
         </div>
       </aside>
+      {dragHint && (
+        <div className={`dragHint${dragHint.ok ? '' : ' no'}`} style={{ left: dragHint.x + 16, top: dragHint.y + 18 }}>
+          {dragHint.ok ? `여기에 놓기 · ${dragHint.label}` : '웹툰 화면 위로 가져오세요'}
+        </div>
+      )}
       {dropActive && <div className="dropOverlay">여기에 놓으세요 · 이미지는 컷으로, .wtoon 은 불러오기, “소재” 탭에서는 소재로 가져와요</div>}
       {sheetFile && (
         <SheetDialog

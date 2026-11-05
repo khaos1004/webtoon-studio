@@ -282,3 +282,9 @@ button.zoom:hover { color: var(--text); }
 .platformBtn.on { border-color: var(--accent); background: #26304a; box-shadow: 0 0 0 1px var(--accent); }
 @media (max-width: 600px) { .platformGrid { grid-template-columns: 1fr 1fr; } }
 .kindGrid { grid-template-columns: repeat(3, 1fr); }
+
+/* 패널에서 화면으로 끌어다 놓기 */
+.dragHint { position: fixed; z-index: 1000; pointer-events: none; background: var(--accent); color: #fff; font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 999px; box-shadow: 0 4px 14px rgba(0, 0, 0, .4); white-space: nowrap; }
+.dragHint.no { background: #3a3f4c; color: var(--muted); }
+.app.dropping .strip { outline: 3px dashed var(--accent); outline-offset: 4px; }
+.kindBtn, .wordBtn { cursor: grab; }

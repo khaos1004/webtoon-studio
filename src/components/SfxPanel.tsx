@@ -5,6 +5,7 @@ import type { Bubble, SfxStyle } from '@/lib/types';
 import { bubbleMarkup, defaultSfx, sfxStyleOf } from '@/lib/bubble';
 import { ALL_SFX_WORDS, SFX_CATEGORIES, SFX_PRESETS, applySfxPreset, type SfxPreset } from '@/lib/sfx';
 import { FONTS, ensureFontLoaded, fontDef, fontStack } from '@/lib/fonts';
+import { DRAG_SFX, endPanelDrag, startPanelDrag } from '@/lib/dragkinds';
 import { Check, ColorField, Section, Slider } from './Panels';
 
 /* ------------------------------ 글꼴 고르기 (말풍선·의성어 공용) ------------------------------ */
@@ -90,7 +91,7 @@ export function SfxPanel(p: SfxPanelProps) {
   return (
     <div>
       <Section title="의성어 넣기">
-        <p className="hint">글자를 누르면 고른 스타일로 바로 들어가요. 화면에서 끌어 옮기고, 모서리로 늘리고, 위쪽 동그라미로 돌려요.</p>
+        <p className="hint">글자를 누르거나 <b>웹툰 화면으로 끌어다 놓으면</b> 고른 스타일로 들어가요. 화면에서 끌어 옮기고, 모서리로 늘리고, 위쪽 동그라미로 돌려요.</p>
         <div className="sfxInputRow">
           <input
             className="text"
@@ -116,7 +117,18 @@ export function SfxPanel(p: SfxPanelProps) {
         )}
         <div className="wordGrid">
           {words.map(({ word }) => (
-            <button key={word} className="wordBtn" disabled={!p.hasCut} onClick={() => add(word)} title={`“${word}” 넣기`}>{word}</button>
+            <button
+              key={word}
+              className="wordBtn"
+              disabled={!p.hasCut}
+              onClick={() => add(word)}
+              draggable={p.hasCut}
+              onDragStart={(e) => startPanelDrag(e.nativeEvent, DRAG_SFX, JSON.stringify({ text: word, style: p.styleId }), `“${word}”`)}
+              onDragEnd={endPanelDrag}
+              title={`“${word}” 넣기 · 화면으로 끌어다 놓으면 그 자리에 들어가요`}
+            >
+              {word}
+            </button>
           ))}
           {!words.length && <p className="hint">“{q}” 에 맞는 의성어가 없어요. 위 칸에 직접 입력해 넣으세요.</p>}
         </div>
