@@ -3,12 +3,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { CSSProperties, PointerEvent as RPointerEvent, ReactElement } from 'react';
 import { PAGE_WIDTH, type Bubble, type Cut, type Effect, type EffectParams, type MaskDef, type MaskMode, type MaskOp, type PageLayer, type Project } from '@/lib/types';
-import { cutFrame, layoutCuts } from '@/lib/project';
+import { cutBorderPaths, cutFrame, cutPolygon, layoutCuts } from '@/lib/project';
 import { getBase, putRGBA } from '@/lib/imageIO';
 import { renderAsync } from '@/lib/renderClient';
 import { getMaterial, materialsSnapshot, subscribeMaterials } from '@/lib/materials';
 import { getMask } from '@/lib/mask';
-import { bubbleMarkup } from '@/lib/bubble';
+import { bubbleMarkup, sfxStyleOf } from '@/lib/bubble';
 import { EFFECT_META } from '@/lib/effectMeta';
 import { wandOp, type WandOptions } from '@/lib/select';
 import { drawPageLayer, hitLayer, layerBounds, onLayerImageLoaded, preloadLayerImages } from '@/lib/pagelayers';
@@ -58,6 +58,8 @@ function CutView({ cut, top, zoom, tool, maskMode, brushSize, wand, selected, sh
   const draftRef = useRef<Draft | null>(null);
   const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
   const f = cutFrame(cut);
+  const poly = cutPolygon(cut);
+  const borderPaths = cutBorderPaths(cut);
 
   const canDraw = MASK_TOOLS.includes(tool) && selected;
 
@@ -371,12 +373,16 @@ function CutView({ cut, top, zoom, tool, maskMode, brushSize, wand, selected, sh
 
   return (
     <div ref={boxRef} className="cut" data-cut={cut.id} style={{ top, width: PAGE_WIDTH, height: cut.height }}>
-      <div className="cutClip" style={{ clipPath: `inset(0 ${f.inset}px 0 ${f.inset}px round ${f.radius}px)` }}>
+      <div className="cutClip" style={{ clipPath: poly ? `polygon(${poly.map(([x, y]) => `${x}px ${y}px`).join(',')})` : `inset(0 ${f.inset}px 0 ${f.inset}px round ${f.radius}px)` }}>
         <canvas ref={canvasRef} width={PAGE_WIDTH} height={cut.height} className="cutCanvas" />
         <canvas ref={overlayRef} width={PAGE_WIDTH} height={cut.height} className="cutOverlay" />
       </div>
-      {f.border > 0 && (
-        <div className="cutBorder" style={{ left: f.inset, right: f.inset, border: `${f.border}px solid ${f.borderColor}`, borderRadius: f.radius }} />
+      {borderPaths.length > 0 && (
+        <svg className="cutBorderSvg" width={PAGE_WIDTH} height={cut.height} viewBox={`0 0 ${PAGE_WIDTH} ${cut.height}`}>
+          {borderPaths.map((bp, i) => (
+            <path key={i} d={bp.d} fill="none" stroke={f.borderColor} strokeWidth={bp.w} strokeLinejoin={f.style === 'rough' ? 'round' : 'miter'} strokeLinecap="round" />
+          ))}
+        </svg>
       )}
       {rendering && <div className="cutBusy" style={{ fontSize: 12 / zoom, padding: `${4 / zoom}px ${8 / zoom}px`, right: f.inset + 8 / zoom, top: 8 / zoom }}>효과 계산 중…</div>}
       {selected && <div className="cutSelBox" style={{ left: f.inset, right: f.inset, borderRadius: f.radius, outlineWidth: 2 / zoom }} />}
@@ -529,7 +535,7 @@ export default function Stage(props: StageProps) {
     return prev.top + prev.cut.height + half;
   })();
 
-  const startDrag = (e: RPointerEvent, kind: 'move' | 'tail' | 'resize', b: Bubble, corner = 0) => {
+  const startDrag = (e: RPointerEvent, kind: 'move' | 'tail' | 'tail2' | 'rotate' | 'resize', b: Bubble, corner = 0) => {
     e.stopPropagation();
     e.preventDefault();
     props.onSelectBubble(b.id);
@@ -540,9 +546,18 @@ export default function Stage(props: StageProps) {
       const dx = p.x - start.x;
       const dy = p.y - start.y;
       if (kind === 'move') {
-        props.onBubbleChange(b.id, { x: orig.x + dx, y: orig.y + dy, tailX: orig.tailX + dx, tailY: orig.tailY + dy }, true);
+        props.onBubbleChange(b.id, { x: orig.x + dx, y: orig.y + dy, tailX: orig.tailX + dx, tailY: orig.tailY + dy, ...(orig.tail2 ? { tail2: { x: orig.tail2.x + dx, y: orig.tail2.y + dy } } : {}) }, true);
       } else if (kind === 'tail') {
         props.onBubbleChange(b.id, { tailX: orig.tailX + dx, tailY: orig.tailY + dy }, true);
+      } else if (kind === 'tail2' && orig.tail2) {
+        props.onBubbleChange(b.id, { tail2: { x: orig.tail2.x + dx, y: orig.tail2.y + dy } }, true);
+      } else if (kind === 'rotate') {
+        const cx = orig.x + orig.w / 2;
+        const cy = orig.y + orig.h / 2;
+        let a = (Math.atan2(p.y - cy, p.x - cx) * 180) / Math.PI + 90;
+        if (ev.shiftKey) a = Math.round(a / 15) * 15;
+        a = ((a + 540) % 360) - 180;
+        props.onBubbleChange(b.id, { sfx: { ...sfxStyleOf(orig), rotation: Math.round(a) } }, true);
       } else {
         let x = orig.x;
         let y = orig.y;
@@ -723,8 +738,19 @@ export default function Stage(props: StageProps) {
                 ].map(([hx, hy], i) => (
                   <rect key={i} x={hx - hs / 2} y={hy - hs / 2} width={hs} height={hs} fill="#fff" stroke="#2e7dff" strokeWidth={1.5 / zoom} style={{ cursor: i === 0 || i === 3 ? 'nwse-resize' : 'nesw-resize' }} onPointerDown={(e) => startDrag(e, 'resize', selBubble, i)} />
                 ))}
-                {selBubble.tail && (
+                {selBubble.tail && selBubble.kind !== 'sfx' && (
                   <circle cx={selBubble.tailX} cy={selBubble.tailY} r={hs * 0.9} fill="#ff4d6a" stroke="#fff" strokeWidth={2 / zoom} style={{ cursor: 'grab' }} onPointerDown={(e) => startDrag(e, 'tail', selBubble)} />
+                )}
+                {selBubble.tail && selBubble.tail2 && selBubble.kind !== 'sfx' && (
+                  <circle cx={selBubble.tail2.x} cy={selBubble.tail2.y} r={hs * 0.9} fill="#ff9f1c" stroke="#fff" strokeWidth={2 / zoom} style={{ cursor: 'grab' }} onPointerDown={(e) => startDrag(e, 'tail2', selBubble)} />
+                )}
+                {selBubble.kind === 'sfx' && (
+                  <>
+                    <line x1={selBubble.x + selBubble.w / 2} y1={selBubble.y} x2={selBubble.x + selBubble.w / 2} y2={selBubble.y - 28 / zoom} stroke="#2e7dff" strokeWidth={1.5 / zoom} pointerEvents="none" />
+                    <circle cx={selBubble.x + selBubble.w / 2} cy={selBubble.y - 28 / zoom} r={hs * 0.8} fill="#fff" stroke="#2e7dff" strokeWidth={2 / zoom} style={{ cursor: 'grab' }} onPointerDown={(e) => startDrag(e, 'rotate', selBubble)}>
+                      <title>끌어서 돌리기 (Shift: 15° 단위)</title>
+                    </circle>
+                  </>
                 )}
               </g>
             )}

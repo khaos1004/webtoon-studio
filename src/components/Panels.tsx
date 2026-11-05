@@ -6,6 +6,7 @@ import { EFFECT_GROUPS, EFFECT_META } from '@/lib/effectMeta';
 import { PRESETS, PRESET_CATEGORIES, type Preset } from '@/lib/presets';
 import { BLEND_LABELS, KIND_LABELS, PATTERN_LABELS, SHAPE_LABELS } from '@/lib/pagelayers';
 import { BUBBLE_KINDS, BUBBLE_LABELS, bubbleBounds, bubbleMarkup, defaultBubble } from '@/lib/bubble';
+import { FontSelect } from './SfxPanel';
 
 /* ------------------------------ 공용 입력 ------------------------------ */
 
@@ -82,10 +83,23 @@ export interface EffectPanelProps {
   /** 소재 선택 목록(라이브러리 + 이 프로젝트의 소재) */
   materials: Material[];
   onOpenMaterials: () => void;
+  /** 영역 고르는 도구(패널에서 바로 고를 수 있게) */
+  tool: string;
+  onTool: (t: 'select' | 'wand' | 'lasso' | 'brush' | 'rect' | 'ellipse') => void;
 }
+
+const REGION_TOOLS = [
+  { id: 'wand', icon: '✦', label: '마술봉', tip: '클릭 한 번으로 선에 둘러싸인 부분 선택 (W)' },
+  { id: 'lasso', icon: '➰', label: '올가미', tip: '윤곽을 따라 그려서 선택 (L)' },
+  { id: 'brush', icon: '🖌', label: '브러시', tip: '칠해서 선택 (B)' },
+  { id: 'rect', icon: '▭', label: '사각', tip: '사각형으로 선택 (M)' },
+  { id: 'ellipse', icon: '◯', label: '타원', tip: '타원으로 선택 (E)' },
+] as const;
 
 export function EffectPanel(p: EffectPanelProps) {
   const [cat, setCat] = useState<(typeof PRESET_CATEGORIES)[number]>('움직임');
+  const [mode, setMode] = useState<'preset' | 'single'>('preset');
+  const [group, setGroup] = useState(EFFECT_GROUPS[0].title);
   const [growPx, setGrowPx] = useState(3);
   const effects = p.cut ? [...p.cut.effects].reverse() : [];
   const sel = p.cut?.effects.find((e) => e.id === p.selEffectId) ?? null;
@@ -93,68 +107,89 @@ export function EffectPanel(p: EffectPanelProps) {
   const opCount = m?.ops.length ?? 0;
   return (
     <div>
-      <Section title="① 영역 고르기">
-        <p className="hint">
-          {p.cut
-            ? '왼쪽 도구로 효과를 줄 부분만 고르세요. 마술봉은 클릭 한 번으로 손·콜라처럼 선으로 둘러싸인 부분을 선택해요. 영역을 고른 뒤 아래 프리셋을 누르면 그 부분에만 적용됩니다.'
-            : '먼저 컷을 추가하거나 샘플 장면을 불러오세요.'}
-        </p>
+      <Section title="① 어디에 줄까요?">
+        {!p.cut && <p className="hint warn">먼저 컷을 추가하거나 ⋯ 메뉴의 샘플 장면을 불러오세요.</p>}
         {p.cut && (
           <>
-            <p className={`hint ${opCount ? '' : 'warn'}`}>
-              {opCount
-                ? `${p.maskTarget === 'effect' ? '선택한 효과 레이어의 영역' : '임시 선택 영역'} · 조각 ${opCount}개`
-                : '아직 고른 영역이 없어요.'}
-            </p>
-            <Slider label="경계 부드러움(px)" value={m?.feather ?? 3} min={0} max={40} step={1} onChange={p.onFeather} />
-            <Check label="영역 반전 (고른 곳 말고 나머지에 적용)" value={!!m?.invert} onChange={p.onInvert} />
-            <div className="grid3">
-              <button className="btn" disabled={!opCount} onClick={() => p.onGrow(-growPx)}>축소 −</button>
-              <button className="btn" disabled={!opCount} onClick={() => p.onGrow(growPx)}>확대 ＋</button>
-              <input className="text" type="number" min={1} max={40} value={growPx} onChange={(e) => setGrowPx(Math.max(1, Math.min(40, parseInt(e.target.value, 10) || 1)))} title="확대/축소 px" />
+            <div className="regionTools">
+              {REGION_TOOLS.map((t) => (
+                <button key={t.id} className={`regionTool ${p.tool === t.id ? 'on' : ''}`} title={t.tip} onClick={() => p.onTool(p.tool === t.id ? 'select' : t.id)}>
+                  <span>{t.icon}</span>
+                  {t.label}
+                </button>
+              ))}
+              <button className="regionTool" title="컷 전체를 영역으로" onClick={p.onFullMask}>
+                <span>▦</span>
+                컷 전체
+              </button>
             </div>
-            <div className="grid3 gapTop">
-              <button className="btn" onClick={p.onFullMask}>컷 전체</button>
-              <button className="btn" disabled={!opCount} onClick={p.onUndoOp}>마지막 취소</button>
-              <button className="btn" disabled={!opCount} onClick={p.onClearMask}>영역 지우기</button>
+            <p className={`hint ${opCount ? 'ok' : ''}`}>
+              {opCount
+                ? `✓ ${p.maskTarget === 'effect' ? '선택한 효과의 영역' : '고른 영역'} · 조각 ${opCount}개 — 아래에서 효과를 고르세요`
+                : '영역을 안 고르면 효과가 컷 전체에 들어가요. 나중에 영역을 고르면 그 부분으로 바뀌어요.'}
+            </p>
+            {opCount > 0 && (
+              <details className="note">
+                <summary>영역 다듬기 (부드럽게 · 반전 · 넓히기)</summary>
+                <Slider label="경계 부드러움(px)" value={m?.feather ?? 3} min={0} max={40} step={1} onChange={p.onFeather} />
+                <Check label="영역 반전 (고른 곳 말고 나머지에 적용)" value={!!m?.invert} onChange={p.onInvert} />
+                <div className="grid3">
+                  <button className="btn" onClick={() => p.onGrow(-growPx)}>축소 −</button>
+                  <button className="btn" onClick={() => p.onGrow(growPx)}>확대 ＋</button>
+                  <input className="text" type="number" min={1} max={40} value={growPx} onChange={(e) => setGrowPx(Math.max(1, Math.min(40, parseInt(e.target.value, 10) || 1)))} title="확대/축소 px" />
+                </div>
+                <div className="grid2 gapTop">
+                  <button className="btn" onClick={p.onUndoOp}>마지막 조각 취소</button>
+                  <button className="btn" onClick={p.onClearMask}>영역 지우기</button>
+                </div>
+              </details>
+            )}
+          </>
+        )}
+      </Section>
+
+      <Section title="② 효과 고르기">
+        <div className="seg segWide">
+          <button className={mode === 'preset' ? 'on' : ''} onClick={() => setMode('preset')}>원클릭 프리셋</button>
+          <button className={mode === 'single' ? 'on' : ''} onClick={() => setMode('single')}>효과 하나씩</button>
+        </div>
+        {mode === 'preset' ? (
+          <>
+            <div className="chips">
+              {PRESET_CATEGORIES.map((c) => (
+                <button key={c} className={`chip ${cat === c ? 'on' : ''}`} onClick={() => setCat(c)}>{c}</button>
+              ))}
+            </div>
+            <div className="presetGrid">
+              {PRESETS.filter((x) => x.category === cat).map((x) => (
+                <button key={x.id} className="presetCard" disabled={!p.cut} onClick={() => p.onPreset(x)} title={x.desc}>
+                  <b>{x.label}</b>
+                  <span>{x.desc}</span>
+                  <i>{x.layers.length}겹</i>
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="chips">
+              {EFFECT_GROUPS.map((g) => (
+                <button key={g.title} className={`chip ${group === g.title ? 'on' : ''}`} onClick={() => setGroup(g.title)}>{g.title}</button>
+              ))}
+            </div>
+            <div className="effList">
+              {(EFFECT_GROUPS.find((g) => g.title === group) ?? EFFECT_GROUPS[0]).types.map((t) => (
+                <button key={t} className="effItem" disabled={!p.cut} onClick={() => p.onAdd(t)}>
+                  <b>+ {EFFECT_META[t].label}</b>
+                  <span>{EFFECT_META[t].desc}</span>
+                </button>
+              ))}
             </div>
           </>
         )}
       </Section>
 
-      <Section title="② 원클릭 프리셋">
-        <div className="chips">
-          {PRESET_CATEGORIES.map((c) => (
-            <button key={c} className={`chip ${cat === c ? 'on' : ''}`} onClick={() => setCat(c)}>{c}</button>
-          ))}
-        </div>
-        <div className="presetGrid">
-          {PRESETS.filter((x) => x.category === cat).map((x) => (
-            <button key={x.id} className="presetCard" disabled={!p.cut} onClick={() => p.onPreset(x)} title={x.desc}>
-              <b>{x.label}</b>
-              <span>{x.desc}</span>
-              <i>{x.layers.length}겹</i>
-            </button>
-          ))}
-        </div>
-      </Section>
-
-      <Section title="개별 효과 추가">
-        {EFFECT_GROUPS.map((g) => (
-          <div key={g.title} className="effGroup">
-            <div className="effGroupTitle">{g.title}</div>
-            <div className="grid2">
-              {g.types.map((t) => (
-                <button key={t} className="btn" disabled={!p.cut} title={EFFECT_META[t].desc} onClick={() => p.onAdd(t)}>
-                  + {EFFECT_META[t].label}
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
-      </Section>
-
-      <Section title="③ 효과 레이어 (위가 가장 나중에 적용)">
+      <Section title={`③ 넣은 효과 (${effects.length}) · 위가 맨 나중에 적용`}>
         {p.fxClip && (
           <div className="clipBar" role="status" data-testid="fx-clip">
             <span>복사한 효과 {p.fxClip.count}개 · {p.fxClip.names}</span>
@@ -292,6 +327,17 @@ export function BubblePanel(p: BubblePanelProps) {
             </div>
             <Slider label="글자 크기" value={b.fontSize} min={12} max={80} step={1} onChange={(v) => p.onChange({ fontSize: v }, true)} />
             <ColorField label="글자 색" value={b.textColor} onChange={(v) => p.onChange({ textColor: v }, true)} />
+            <FontSelect value={b.font} sample={b.text.split('\n')[0] || '안녕!'} onChange={(id) => p.onChange({ font: id })} />
+            <div className="grid2">
+              <Check label="굵게" value={b.bold ?? (b.kind === 'shout' || b.kind === 'shock' || b.kind === 'flash')} onChange={(v) => p.onChange({ bold: v })} />
+              <Check label="세로쓰기" value={!!b.vertical} onChange={(v) => p.onChange({ vertical: v })} />
+            </div>
+            {!b.vertical && (
+              <div className="seg segWide">
+                <button className={b.align !== 'left' ? 'on' : ''} onClick={() => p.onChange({ align: 'center' })}>가운데 정렬</button>
+                <button className={b.align === 'left' ? 'on' : ''} onClick={() => p.onChange({ align: 'left' })}>왼쪽 정렬</button>
+              </div>
+            )}
           </Section>
           <Section title="모양·색 (본체와 꼬리 동일 적용)">
             <ColorField label="배경색" value={b.fill} onChange={(v) => p.onChange({ fill: v }, true)} />
@@ -303,11 +349,17 @@ export function BubblePanel(p: BubblePanelProps) {
             <Check label="꼬리 사용" value={b.tail} onChange={(v) => p.onChange({ tail: v })} />
             {b.tail && (
               <>
+                <Check
+                  label="꼬리 두 개 (둘이 같이 말할 때)"
+                  value={!!b.tail2}
+                  onChange={(v) => p.onChange({ tail2: v ? { x: b.x + b.w - (b.tailX - b.x), y: b.tailY } : null })}
+                />
+                {b.tail2 && <p className="hint">화면의 주황 점으로 두 번째 꼬리를 옮겨요.</p>}
                 <Slider label="꼬리 폭" value={b.tailWidth} min={10} max={90} step={1} onChange={(v) => p.onChange({ tailWidth: v }, true)} />
                 <Slider label="꼬리 휘어짐" value={b.tailCurve} min={-1} max={1} step={0.01} onChange={(v) => p.onChange({ tailCurve: v }, true)} />
               </>
             )}
-            {(b.kind === 'shout' || b.kind === 'shock' || b.kind === 'horror') && <Slider label="모양 변화(시드)" value={b.seed} min={1} max={99} step={1} onChange={(v) => p.onChange({ seed: v }, true)} />}
+            {(['shout', 'shock', 'horror', 'phone', 'wobble', 'flash'] as BubbleKind[]).includes(b.kind) && <Slider label="모양 변화(시드)" value={b.seed} min={1} max={99} step={1} onChange={(v) => p.onChange({ seed: v }, true)} />}
           </Section>
           <div className="grid3 pad">
             <button className="btn" onClick={() => p.onZ(1)}>앞으로</button>
@@ -342,6 +394,37 @@ export interface CutPanelProps {
   /** 복사해 둔 효과가 있는가 / 이 컷에 붙여넣기 */
   hasFxClip: boolean;
   onPasteTo: (id: string) => void;
+  /** 컷을 위치(px 목록)에서 나눈다 */
+  onSplit: (id: string, at: number[]) => void;
+  /** 이 컷 아래 사선과 다음 컷 위 사선을 같이 바꾼다 */
+  onSlantJoint: (id: string, v: number) => void;
+}
+
+const FRAME_PRESETS: { label: string; patch: Partial<Cut> }[] = [
+  { label: '없음', patch: { border: 0, inset: 0, radius: 0, borderStyle: 'solid' } },
+  { label: '기본 컷선', patch: { border: 4, inset: 40, radius: 0, borderStyle: 'solid', borderColor: '#111111' } },
+  { label: '두 줄', patch: { border: 4, inset: 40, radius: 0, borderStyle: 'double', borderColor: '#111111' } },
+  { label: '붓선', patch: { border: 5, inset: 40, radius: 0, borderStyle: 'rough', borderColor: '#111111' } },
+  { label: '둥근 컷', patch: { border: 3, inset: 40, radius: 28, borderStyle: 'solid', borderColor: '#111111' } },
+  { label: '회상 (흰 테)', patch: { border: 10, inset: 60, radius: 6, borderStyle: 'solid', borderColor: '#ffffff' } },
+];
+
+function SplitBox({ cut, onSplit }: { cut: Cut; onSplit: (at: number[]) => void }) {
+  const [pos, setPos] = useState(50);
+  const [n, setN] = useState(2);
+  return (
+    <div className="splitBox">
+      <Slider label={`나눌 위치 (위에서 ${pos}% · ${Math.round((cut.height * pos) / 100)}px)`} value={pos} min={5} max={95} step={1} onChange={setPos} />
+      <div className="grid2">
+        <button className="btn" onClick={() => onSplit([(cut.height * pos) / 100])}>여기서 둘로 나누기</button>
+        <div className="splitN">
+          <input className="text" type="number" min={2} max={10} value={n} onChange={(e) => setN(Math.max(2, Math.min(10, parseInt(e.target.value, 10) || 2)))} aria-label="나눌 개수" />
+          <button className="btn" onClick={() => onSplit(Array.from({ length: n - 1 }, (_, i) => (cut.height * (i + 1)) / n))}>등분</button>
+        </div>
+      </div>
+      {cut.effects.length > 0 && <p className="hint warn">효과 {cut.effects.length}개는 그림에 합쳐진 채로 나뉘어요 (Ctrl+Z 로 되돌릴 수 있어요).</p>}
+    </div>
+  );
 }
 
 function CutIndexInput({ index, count, onCommit }: { index: number; count: number; onCommit: (to: number) => void }) {
@@ -450,10 +533,35 @@ export function CutPanel(p: CutPanelProps) {
               </>
             );
           })()}
+          <h4 className="subHead">컷 테두리 빠른 설정</h4>
+          <div className="chips">
+            {FRAME_PRESETS.map((fp) => (
+              <button key={fp.label} className="chip" onClick={() => p.onCut(sel.id, fp.patch)}>{fp.label}</button>
+            ))}
+          </div>
           <Slider label="좌우 여백(px) · 뒤 배경이 보여요" value={sel.inset ?? 0} min={0} max={300} step={2} onChange={(v) => p.onCut(sel.id, { inset: v }, true)} />
-          <Slider label="모서리 둥글기(px)" value={sel.radius ?? 0} min={0} max={120} step={1} onChange={(v) => p.onCut(sel.id, { radius: v }, true)} />
+          <Slider label="모서리 둥글기(px) · 사선 컷에는 안 먹어요" value={sel.radius ?? 0} min={0} max={120} step={1} onChange={(v) => p.onCut(sel.id, { radius: v }, true)} />
           <Slider label="테두리 굵기(px)" value={sel.border ?? 0} min={0} max={24} step={1} onChange={(v) => p.onCut(sel.id, { border: v }, true)} />
-          {(sel.border ?? 0) > 0 && <ColorField label="테두리 색" value={sel.borderColor ?? '#000000'} onChange={(v) => p.onCut(sel.id, { borderColor: v }, true)} />}
+          {(sel.border ?? 0) > 0 && (
+            <>
+              <ColorField label="테두리 색" value={sel.borderColor ?? '#000000'} onChange={(v) => p.onCut(sel.id, { borderColor: v }, true)} />
+              <div className="seg segWide">
+                {(['solid', 'double', 'rough'] as const).map((st) => (
+                  <button key={st} className={(sel.borderStyle ?? 'solid') === st ? 'on' : ''} onClick={() => p.onCut(sel.id, { borderStyle: st })}>
+                    {st === 'solid' ? '실선' : st === 'double' ? '두 줄' : '거친 붓선'}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          <h4 className="subHead">사선 컷</h4>
+          <Slider label="위 가장자리 기울기(px) · + 오른쪽이 내려감" value={sel.slantTop ?? 0} min={-300} max={300} step={2} onChange={(v) => p.onCut(sel.id, { slantTop: v }, true)} />
+          <Slider label="아래 가장자리 기울기(px)" value={sel.slantBottom ?? 0} min={-300} max={300} step={2} onChange={(v) => p.onCut(sel.id, { slantBottom: v }, true)} />
+          {p.project.cuts.findIndex((c) => c.id === sel.id) < p.project.cuts.length - 1 && (
+            <button className="linkBtn" onClick={() => p.onSlantJoint(sel.id, sel.slantBottom ?? 0)} title="두 컷 사이 틈이 평행한 사선이 돼요">다음 컷 위쪽도 같은 기울기로 맞추기</button>
+          )}
+          <h4 className="subHead">컷 나누기</h4>
+          <SplitBox cut={sel} onSplit={(at) => p.onSplit(sel.id, at)} />
           <label className="field">
             <span className="fieldLabel">이미지 뒤 바탕</span>
             <select className="text" value={sel.bg === 'transparent' ? 'transparent' : 'color'} onChange={(e) => p.onCut(sel.id, { bg: e.target.value === 'transparent' ? 'transparent' : '#ffffff' })}>
@@ -651,8 +759,12 @@ export interface MaterialPanelProps {
   onDropFiles: (files: File[]) => void;
   onToCut: (m: Material, fit: 'stamp' | 'tile' | 'cover') => void;
   onToPage: (m: Material) => void;
+  onToBack: (m: Material) => void;
   onDelete: (id: string) => void;
 }
+
+/** 소재 목록에서 화면으로 끌어다 놓을 때 쓰는 데이터 종류 */
+export const MAT_DRAG = 'application/x-wls-material';
 
 const HINT_LABEL: Record<Material['hint'], string> = {
   alpha: '투명 배경 소재',
@@ -661,12 +773,24 @@ const HINT_LABEL: Record<Material['hint'], string> = {
   color: '일반 컬러 이미지',
 };
 
-function MatGrid({ list, selId, onSelect }: { list: Material[]; selId: string | null; onSelect: (id: string | null) => void }) {
+function MatGrid({ list, selId, onSelect, onPlace }: { list: Material[]; selId: string | null; onSelect: (id: string | null) => void; onPlace: (m: Material) => void }) {
   if (!list.length) return null;
   return (
     <div className="matGrid">
       {list.map((m) => (
-        <button key={m.id} className={`matItem ${m.id === selId ? 'on' : ''}`} onClick={() => onSelect(m.id === selId ? null : m.id)} title={m.name}>
+        <button
+          key={m.id}
+          className={`matItem ${m.id === selId ? 'on' : ''}`}
+          onClick={() => onSelect(m.id)}
+          onDoubleClick={() => onPlace(m)}
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData(MAT_DRAG, m.id);
+            e.dataTransfer.effectAllowed = 'copy';
+            onSelect(m.id);
+          }}
+          title={`${m.name} · 두 번 클릭하면 화면에 놓여요 · 화면으로 끌어다 놓아도 돼요`}
+        >
           <span className="matThumb">{/* eslint-disable-next-line @next/next/no-img-element */}<img src={m.thumb ?? m.src} alt={m.name} loading="lazy" decoding="async" /></span>
           <span className="matName">{m.name}</span>
         </button>
@@ -710,27 +834,38 @@ export function MaterialPanel(p: MaterialPanelProps) {
 
       <Section title={`소재 목록 (${p.materials.length})`}>
         {p.materials.length > 12 && <input type="search" className="matSearch" data-testid="mat-search" placeholder="이름으로 찾기 (예: 쭈웁, 허억)" value={q} onChange={(e) => setQ(e.target.value)} />}
+        {sel ? (
+          <div className="matActions" role="toolbar">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={sel.thumb ?? sel.src} alt="" />
+            <div className="matActionsBody">
+              <b>{sel.name}</b>
+              <button className="btn primary wide" disabled={!p.hasCut} onClick={() => p.onToPage(sel)}>화면에 놓기 (옮기기·크기·회전 자유)</button>
+              <details>
+                <summary>다른 방법으로 넣기</summary>
+                <div className="grid2">
+                  <button className="btn" disabled={!p.hasCut} onClick={() => p.onToCut(sel, 'stamp')} title="고른 영역(없으면 컷) 안에만 보이게">영역 안에 한 장</button>
+                  <button className="btn" disabled={!p.hasCut} onClick={() => p.onToCut(sel, 'tile')}>반복 톤으로 채우기</button>
+                  <button className="btn" disabled={!p.hasCut} onClick={() => p.onToCut(sel, 'cover')}>영역 가득 채우기</button>
+                  <button className="btn" onClick={() => p.onToBack(sel)}>컷 뒤 배경으로</button>
+                </div>
+                <p className="hint">{sel.w}×{sel.h}px · {HINT_LABEL[sel.hint]}</p>
+                {!sel.builtin && <button className="btn danger wide" onClick={() => p.onDelete(sel.id)}>라이브러리에서 삭제</button>}
+              </details>
+            </div>
+            <button className="iconBtn" title="선택 해제" onClick={() => p.onSelect(null)}>✕</button>
+          </div>
+        ) : (
+          p.materials.length > 0 && <p className="hint tip">소재를 누르면 넣기 버튼이 나와요. <b>두 번 클릭</b>하거나 <b>화면으로 끌어다 놓으면</b> 바로 놓여요.</p>
+        )}
         {p.materials.length === 0 && <p className="hint">아직 가져온 소재가 없어요.</p>}
         {mine.length > 0 && <h4 className="matHead">내가 가져온 소재 ({mine.length})</h4>}
-        <MatGrid list={mine} selId={p.selId} onSelect={p.onSelect} />
+        <MatGrid list={mine} selId={p.selId} onSelect={p.onSelect} onPlace={p.onToPage} />
         {fixed.length > 0 && <h4 className="matHead">내장 소재 ({fixed.length})</h4>}
-        <MatGrid list={fixed} selId={p.selId} onSelect={p.onSelect} />
+        <MatGrid list={fixed} selId={p.selId} onSelect={p.onSelect} onPlace={p.onToPage} />
         {filtered.length === 0 && p.materials.length > 0 && <p className="hint">“{q}” 에 맞는 소재가 없어요.</p>}
       </Section>
 
-      {sel && (
-        <Section title={`“${sel.name}” 사용하기`}>
-          <p className="hint">{sel.w}×{sel.h}px · {HINT_LABEL[sel.hint]}으로 보여요. 붙인 뒤 효과 탭에서 크기·색·합성 방식을 바꿀 수 있어요.</p>
-          <p className="hint">영역을 먼저 골라 두면 그 부분에만, 고르지 않으면 컷 전체에 붙어요.</p>
-          <div className="grid2">
-            <button className="btn" disabled={!p.hasCut} onClick={() => p.onToCut(sel, 'stamp')}>컷에 한 장 붙이기</button>
-            <button className="btn" disabled={!p.hasCut} onClick={() => p.onToCut(sel, 'tile')}>반복해서 채우기(톤)</button>
-            <button className="btn" disabled={!p.hasCut} onClick={() => p.onToCut(sel, 'cover')}>영역 가득 채우기</button>
-            <button className="btn" onClick={() => p.onToPage(sel)}>컷 밖 배경에 놓기</button>
-          </div>
-          {!sel.builtin && <button className="btn danger wide gapTop" onClick={() => p.onDelete(sel.id)}>라이브러리에서 삭제</button>}
-        </Section>
-      )}
     </div>
   );
 }
