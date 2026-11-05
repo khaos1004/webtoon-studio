@@ -24,21 +24,27 @@ import { buildPreset, type Preset } from '@/lib/presets';
 import { growMaskDef } from '@/lib/mask';
 import { DEFAULT_WAND, type WandOptions } from '@/lib/select';
 import { createLayer, fileToLayerImage } from '@/lib/pagelayers';
-import { defaultBubble, fitBubble } from '@/lib/bubble';
+import { defaultBubble, defaultSfx, fitBubble } from '@/lib/bubble';
+import { applySfxPreset, presetById } from '@/lib/sfx';
+import { ensureFontsForBubbles } from '@/lib/fonts';
 import { fileToCut } from '@/lib/imageIO';
 import { canvasToBlob, downloadBlob, ensureProjectMaterials, exportPsd, layoutCuts, parseProject, renderStrip, serializeProject } from '@/lib/project';
 import { ensureMaterialPixels, importMaterialFiles, loadBuiltinMaterials, loadLibrary, materialToPortable, removeFromLibrary, saveToLibrary } from '@/lib/materials';
 import { createSampleCut } from '@/lib/sample';
-import { cloneEffects, duplicateCut, duplicateEffect } from '@/lib/cutops';
+import { cloneEffects, duplicateCut, duplicateEffect, splitCut } from '@/lib/cutops';
 import { canOverwrite, saveProjectFile, type FileHandleLike } from '@/lib/filesave';
 import { clearAutosave, loadAutosave, saveAutosave, type AutosaveRecord } from '@/lib/autosave';
-import Stage, { MASK_TOOLS, type Tool } from './Stage';
-import { BgPanel, BubblePanel, CutPanel, EffectPanel, MaterialPanel } from './Panels';
+import Stage, { type Tool } from './Stage';
+import { BgPanel, BubblePanel, CutPanel, EffectPanel, MAT_DRAG, MaterialPanel } from './Panels';
 import { ExportDialog, HelpDialog, MoreMenu, SheetDialog } from './Dialogs';
+import { SfxPanel } from './SfxPanel';
 
 const EMPTY: MaskDef = { ops: [], feather: 3 };
 
-type Tab = 'effects' | 'bubbles' | 'bg' | 'materials' | 'cuts';
+type Tab = 'effects' | 'sfx' | 'bubbles' | 'bg' | 'materials' | 'cuts';
+
+const TAB_LABELS: Record<Tab, string> = { effects: '효과', sfx: '의성어', materials: '소재', bubbles: '말풍선', bg: '배경·장식', cuts: '컷' };
+const TAB_ORDER: Tab[] = ['effects', 'sfx', 'bubbles', 'materials', 'bg', 'cuts'];
 
 const TOOLS: { id: Tool; label: string; icon: string; hint: string }[] = [
   { id: 'select', label: '선택/이동', icon: '↖', hint: '컷·말풍선을 선택하고 옮깁니다' },
@@ -107,6 +113,7 @@ export default function Editor() {
   const [library, setLibrary] = useState<Material[]>([]);
   const [builtin, setBuiltin] = useState<Material[]>([]);
   const [selMatId, setSelMatId] = useState<string | null>(null);
+  const [sfxStyle, setSfxStyle] = useState('impact');
 
   useEffect(() => {
     let on = true;
@@ -240,19 +247,23 @@ export default function Editor() {
     return null;
   };
 
+  /** 영역 없이 넣어서 '컷 전체'로 들어간 효과. 처음 영역을 고르면 컷 전체 대신 그 영역으로 바뀐다 */
+  const autoFull = useRef(new Set<string>());
+
   const addLayersToCut = (cut: Cut, effects: Effect[], mask: MaskDef | null) => {
+    if (!mask) {
+      // 영역을 안 골랐으면 일단 컷 전체에 적용해서 바로 결과가 보이게 한다
+      const full: MaskOp = { kind: 'rect', mode: 'add', x: 0, y: 0, w: PAGE_WIDTH, h: cut.height };
+      effects = effects.map((e) => (e.mask.ops.length ? e : { ...e, mask: { ...e.mask, ops: [full] } }));
+      for (const e of effects) autoFull.current.add(e.id);
+    }
     updateCut(cut.id, (c) => ({ ...c, effects: [...c.effects, ...effects] }));
     setSelCutId(cut.id);
     setSelEffectId(effects[effects.length - 1].id);
     setPending(null);
     setSelLayerId(null);
     setTab('effects');
-    if (!mask) {
-      setTool((t) => (MASK_TOOLS.includes(t) ? t : 'wand'));
-      say('영역이 비어 있어요. 마술봉·올가미로 효과를 줄 부분을 고르면 바로 적용돼요');
-    } else {
-      setTool((t) => (t === 'select' ? 'select' : t));
-    }
+    if (!mask) say('컷 전체에 적용했어요 · 일부분만 원하면 마술봉·올가미로 고르세요 (고른 부분으로 바뀌어요)');
   };
 
   const addEffect = (type: EffectType) => {
@@ -277,9 +288,12 @@ export default function Editor() {
     if (!cut) return;
     const se = cut.effects.find((e) => e.id === selEffectRef.current);
     if (se) {
+      const replace = autoFull.current.has(se.id) && op.mode === 'add';
+      const ids = new Set(cut.effects.filter((e) => e.id === se.id || (se.group && e.group === se.group)).map((e) => e.id));
+      for (const id of ids) autoFull.current.delete(id);
       updateCut(cutId, (c) => ({
         ...c,
-        effects: c.effects.map((e) => (e.id === se.id || (se.group && e.group === se.group) ? { ...e, mask: { ...e.mask, ops: [...e.mask.ops, op] } } : e)),
+        effects: c.effects.map((e) => (ids.has(e.id) ? { ...e, mask: { ...e.mask, ops: replace ? [op] : [...e.mask.ops, op] } } : e)),
       }));
     } else {
       setPending((pd) => {
@@ -438,6 +452,37 @@ export default function Editor() {
       `gapb-${id}`,
     );
 
+  const doSplitCut = async (id: string, at: number[]) => {
+    const cut = projectRef.current.cuts.find((c) => c.id === id);
+    if (!cut || !at.length) return;
+    setBusy('컷 나누는 중…');
+    try {
+      const parts = await splitCut(cut, at);
+      if (parts.length < 2) return say('너무 가장자리라 나눌 수 없어요');
+      commit((p) => {
+        const i = p.cuts.findIndex((c) => c.id === id);
+        if (i < 0) return p;
+        const arr = [...p.cuts];
+        arr.splice(i, 1, ...parts);
+        return { ...p, cuts: arr };
+      });
+      setSelCutId(parts[0].id);
+      setSelEffectId(null);
+      say(`컷을 ${parts.length}개로 나눴어요. 컷 사이 간격은 “이 컷 위 간격”으로 바꿀 수 있어요`);
+    } catch (e) {
+      say('나누지 못했어요: ' + (e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const slantJoint = (id: string, v: number) =>
+    commit((p) => {
+      const i = p.cuts.findIndex((c) => c.id === id);
+      if (i < 0 || i >= p.cuts.length - 1) return p;
+      return { ...p, cuts: p.cuts.map((c, j) => (j === i ? { ...c, slantBottom: v } : j === i + 1 ? { ...c, slantTop: v } : c)) };
+    });
+
   const deleteCut = (id: string) => {
     commit((p) => ({ ...p, cuts: p.cuts.filter((c) => c.id !== id) }));
     if (selCutId === id) {
@@ -570,25 +615,42 @@ export default function Editor() {
     say('소재를 붙였어요. 효과 탭에서 크기·색·합성 방식을 바꿀 수 있어요');
   };
 
-  const materialToPage = async (m: Material) => {
+  /**
+   * 소재를 화면 위에 자유롭게 놓는다(컷 위 장식 레이어). 끌어서 옮기고, 모서리로 크기, 동그라미로 회전.
+   * at 을 주면 그 위치(페이지 좌표)를 가운데로, 아니면 선택한 컷 가운데에 놓는다. z='back' 이면 컷 뒤 배경으로.
+   */
+  const materialToPage = async (m: Material, at?: { x: number; y: number }, z: 'front' | 'back' = 'front') => {
     await adoptMaterial(m);
     const portableSrc = (await materialToPortable(m)).src; // 내장 소재도 파일 안에 그림이 들어가도록
     const { items, total } = layoutCuts(projectRef.current);
-    const target = items.find((i) => i.cut.id === selCutId) ?? items[0];
-    const w = Math.min(PAGE_WIDTH, m.w);
+    const target = items.find((i) => i.cut.id === selCutRef.current) ?? items[0];
+    const w = Math.round(z === 'back' ? Math.min(PAGE_WIDTH, m.w) : Math.min(m.w, PAGE_WIDTH * 0.45));
     const h = Math.round((w * m.h) / m.w);
+    const cx = at?.x ?? PAGE_WIDTH / 2;
+    const cy = at?.y ?? (target ? target.top + target.cut.height / 2 : total / 2);
     addLayer('image', {
       src: portableSrc,
       imgW: m.w,
       imgH: m.h,
       w,
       h,
-      x: Math.round((PAGE_WIDTH - w) / 2),
-      y: Math.round(Math.max(0, Math.min(total - h, (target?.top ?? 0) + 30))),
+      z,
+      x: Math.round(cx - w / 2),
+      y: Math.round(Math.max(-h / 2, Math.min(total - h / 2, cy - h / 2))),
       fit: 'stretch',
       blend: m.hint === 'ink' ? 'multiply' : m.hint === 'light' ? 'screen' : 'normal',
       name: m.name.slice(0, 24),
     });
+    say('소재를 놓았어요 · 끌어서 옮기고, 모서리로 크기, 위 동그라미로 회전해요');
+  };
+
+  /** 화면 좌표 → 페이지 좌표 (소재를 끌어다 놓을 때) */
+  const clientToPage = (clientX: number, clientY: number) => {
+    const strip = document.querySelector('.strip') as HTMLElement | null;
+    if (!strip) return null;
+    const r = strip.getBoundingClientRect();
+    if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) return null;
+    return { x: ((clientX - r.left) / r.width) * PAGE_WIDTH, y: ((clientY - r.top) / r.height) * layoutCuts(projectRef.current).total };
   };
 
   const deleteMaterial = (id: string) => {
@@ -611,6 +673,37 @@ export default function Editor() {
     setTab('bubbles');
   };
 
+  /** 글자 의성어를 선택한 컷 가운데쯤에 넣는다(연달아 넣으면 조금씩 비켜서) */
+  const sfxCount = useRef(0);
+  const addSfx = (text: string, styleId: string) => {
+    const { items } = layoutCuts(projectRef.current);
+    const target = items.find((i) => i.cut.id === selCutRef.current) ?? items[items.length - 1];
+    if (!target) return say('먼저 컷을 추가하세요');
+    const n = sfxCount.current++ % 5;
+    const h = Math.round(Math.min(170, Math.max(90, target.cut.height * 0.16)));
+    let b = defaultSfx(0, 0, text, { h });
+    b = applySfxPreset(b, presetById(styleId));
+    b = fitBubble({ ...b, h });
+    const x = Math.round(PAGE_WIDTH / 2 - b.w / 2 + (n - 2) * 40);
+    const y = Math.round(target.top + target.cut.height / 2 - b.h / 2 + (n - 2) * 30);
+    b = { ...b, x, y, tailX: x, tailY: y };
+    commit((p) => ({ ...p, bubbles: [...p.bubbles, b] }));
+    setSelBubbleId(b.id);
+    setSelLayerId(null);
+    setTool('select');
+    setTab('sfx');
+  };
+
+  const moveBubbleZ = (id: string, dir: -1 | 1) =>
+    commit((p) => {
+      const i = p.bubbles.findIndex((b) => b.id === id);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= p.bubbles.length) return p;
+      const arr = [...p.bubbles];
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+      return { ...p, bubbles: arr };
+    });
+
   const changeBubble = (id: string, patch: Partial<Bubble>, coalesce?: boolean) =>
     commit(
       (p) => ({ ...p, bubbles: p.bubbles.map((b) => (b.id === id ? { ...b, ...patch } : b)) }),
@@ -620,7 +713,7 @@ export default function Editor() {
   const dupBubble = (id: string) => {
     const src = projectRef.current.bubbles.find((b) => b.id === id);
     if (!src) return;
-    const copy: Bubble = { ...src, id: uid(), x: src.x + 24, y: src.y + 24, tailX: src.tailX + 24, tailY: src.tailY + 24 };
+    const copy: Bubble = { ...src, id: uid(), x: src.x + 24, y: src.y + 24, tailX: src.tailX + 24, tailY: src.tailY + 24, ...(src.tail2 ? { tail2: { x: src.tail2.x + 24, y: src.tail2.y + 24 } } : {}) };
     commit((p) => ({ ...p, bubbles: [...p.bubbles, copy] }));
     setSelBubbleId(copy.id);
   };
@@ -633,7 +726,10 @@ export default function Editor() {
     setSelLayerId(copy.id);
   };
 
-  const selBubble = project.bubbles.find((b) => b.id === selBubbleId) ?? null;
+  const selAny = project.bubbles.find((b) => b.id === selBubbleId) ?? null;
+  const selBubble = selAny && selAny.kind !== 'sfx' ? selAny : null;
+  const selSfx = selAny && selAny.kind === 'sfx' ? selAny : null;
+  const bubbleTab = (id: string | null): Tab => (projectRef.current.bubbles.find((b) => b.id === id)?.kind === 'sfx' ? 'sfx' : 'bubbles');
   const selCut = project.cuts.find((c) => c.id === selCutId) ?? null;
   const tCut = selCut ?? project.cuts[project.cuts.length - 1] ?? null;
   const tEffect = tCut?.effects.find((e) => e.id === selEffectId) ?? null;
@@ -763,7 +859,7 @@ export default function Editor() {
    * 그 탭에 선택된 게 없으면 화면에서 선택된 말풍선 → 배경 레이어 → 컷 순서로 찾는다.
    */
   const focusKind = (): 'bubble' | 'layer' | 'effect' | 'cut' | null => {
-    if (tab === 'bubbles' && selBubbleId) return 'bubble';
+    if ((tab === 'bubbles' || tab === 'sfx') && selBubbleId) return 'bubble';
     if (tab === 'bg' && selLayerId) return 'layer';
     if (tab === 'effects' && selEffectId) return 'effect';
     if (tab === 'cuts' && selCutId) return 'cut';
@@ -778,7 +874,7 @@ export default function Editor() {
     if (kind === 'bubble') {
       const b = projectRef.current.bubbles.find((x) => x.id === selBubbleId);
       if (!b) return false;
-      changeBubble(b.id, { x: b.x + dx, y: b.y + dy, tailX: b.tailX + dx, tailY: b.tailY + dy }, true);
+      changeBubble(b.id, { x: b.x + dx, y: b.y + dy, tailX: b.tailX + dx, tailY: b.tailY + dy, ...(b.tail2 ? { tail2: { x: b.tail2.x + dx, y: b.tail2.y + dy } } : {}) }, true);
       return true;
     }
     if (kind === 'layer') {
@@ -966,7 +1062,13 @@ export default function Editor() {
   }, []);
 
   const hasFiles = (e: RDragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+  const hasMat = (e: RDragEvent) => Array.from(e.dataTransfer?.types ?? []).includes(MAT_DRAG);
   const onAppDragOver = (e: RDragEvent) => {
+    if (hasMat(e)) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      return;
+    }
     if (!hasFiles(e)) return;
     e.preventDefault();
     setDropActive(true);
@@ -976,6 +1078,15 @@ export default function Editor() {
   };
   const onAppDrop = (e: RDragEvent) => {
     setDropActive(false);
+    if (hasMat(e)) {
+      e.preventDefault();
+      const m = allMaterials.find((x) => x.id === e.dataTransfer.getData(MAT_DRAG));
+      const at = clientToPage(e.clientX, e.clientY);
+      if (!m) return;
+      if (!at) return say('소재는 웹툰 화면 위에 놓아 주세요');
+      void materialToPage(m, at);
+      return;
+    }
     if (e.defaultPrevented || !hasFiles(e)) return; // 소재 칸·빈 화면은 자기 처리를 한다
     e.preventDefault();
     const files: File[] = Array.from(e.dataTransfer.files as FileList);
@@ -1043,6 +1154,9 @@ export default function Editor() {
     return () => window.removeEventListener('beforeunload', h);
   }, [guardUnload]);
 
+  /* ---------- 말풍선·의성어가 쓰는 글꼴을 화면에 불러온다 ---------- */
+  useEffect(() => ensureFontsForBubbles(project.bubbles), [project.bubbles]);
+
   /* ---------- 첫 컷을 올리면 화면 폭에 맞춘다 ---------- */
   const hadCuts = useRef(false);
   useEffect(() => {
@@ -1101,17 +1215,17 @@ export default function Editor() {
   return (
     <div className={`app${panning ? ' panning' : ''}`} data-tool={tool} onDragOver={onAppDragOver} onDragLeave={onAppDragLeave} onDrop={onAppDrop}>
       <header className="topbar">
-        <strong className="brand">Webtoon Layout Studio</strong>
-        <button className="btn" onClick={() => fileRef.current?.click()}>＋ 컷 추가(이미지)</button>
-        <button className="btn" onClick={() => addCuts([createSampleCut(true)])}>샘플 장면(콜라+흔들림)</button>
+        <strong className="brand">웹툰 스튜디오</strong>
+        <button className="btn primary" onClick={() => fileRef.current?.click()} title="이미지를 컷으로 추가 (끌어다 놓기·붙여넣기도 돼요)">＋ 컷 추가</button>
         <span className="sep" />
-        <button className="btn" onClick={undo} disabled={!past.current.length}>↶ 실행취소</button>
-        <button className="btn" onClick={redo} disabled={!future.current.length}>↷ 다시</button>
+        <button className="btn icon" onClick={undo} disabled={!past.current.length} title="실행취소 (Ctrl+Z)" aria-label="실행취소">↶</button>
+        <button className="btn icon" onClick={redo} disabled={!future.current.length} title="다시 실행 (Ctrl+Y)" aria-label="다시 실행">↷</button>
         <span className="sep" />
-        <button className="btn" onClick={() => setZoom((z) => Math.max(0.2, +(z - 0.1).toFixed(2)))}>−</button>
-        <span className="zoom">{Math.round(zoom * 100)}%</span>
-        <button className="btn" onClick={() => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)))}>＋</button>
-        <button className="btn" onClick={fitZoom}>맞춤</button>
+        <div className="zoomGroup" title="확대/축소 (Ctrl+휠, +/−, 0 = 화면에 맞춤)">
+          <button className="btn icon" onClick={() => zoomStep(-0.1)} aria-label="축소">−</button>
+          <button className="zoom" onClick={fitZoom} title="화면에 맞추기 (0)">{Math.round(zoom * 100)}%</button>
+          <button className="btn icon" onClick={() => zoomStep(0.1)} aria-label="확대">＋</button>
+        </div>
         <button
           className={`btn ${showOriginal ? 'primary' : ''}`}
           title="누르고 있는 동안 효과 없는 원본을 보여줘요 (키보드 C)"
@@ -1126,22 +1240,23 @@ export default function Editor() {
         <span className="grow" />
         {hasContent && (
           <span className={`fileState${dirty ? ' dirty' : ''}`} data-testid="file-state" title={dirty ? '마지막으로 파일에 저장한 뒤 바뀐 내용이 있어요 (Ctrl+S)' : '파일에 저장된 상태예요'}>
-            {dirty ? '● 파일에 저장 안 됨' : `✓ ${fileName ?? '저장됨'}`}
+            {dirty ? '● 저장 안 됨' : `✓ ${fileName ?? '저장됨'}`}
           </span>
         )}
         {saveText && <span className="saveState" data-testid="save-state">{saveText}</span>}
-        <button className="btn" onClick={() => setHelpOpen(true)} title="단축키 · 사용 팁 (?)">?</button>
-        <button className="btn" onClick={() => loadRef.current?.click()}>불러오기</button>
-        <button className="btn" onClick={() => void saveProject()} disabled={!hasContent} title={canOverwrite() ? '프로젝트 파일로 저장 — 한 번 위치를 정하면 같은 파일에 덮어써요 (Ctrl+S)' : '프로젝트 파일로 저장 (Ctrl+S)'}>저장(.wtoon)</button>
-        <button className="btn primary" onClick={() => doExport('jpg')} disabled={!hasCuts} title="JPG 한 장으로 저장">JPG</button>
+        <button className="btn icon" onClick={() => setHelpOpen(true)} title="단축키 · 사용 팁 (?)" aria-label="도움말">?</button>
+        <button className="btn" onClick={() => loadRef.current?.click()} title="프로젝트(.wtoon) 열기">열기</button>
+        <button className="btn" onClick={() => void saveProject()} disabled={!hasContent} title={canOverwrite() ? '프로젝트 파일로 저장 — 한 번 위치를 정하면 같은 파일에 덮어써요 (Ctrl+S)' : '프로젝트 파일로 저장 (Ctrl+S)'}>저장</button>
+        <button className="btn primary" onClick={() => setExportOpen(true)} disabled={!hasCuts} title="네이버·인스타 등 올릴 곳에 맞춰 이미지로 저장">내보내기</button>
         <MoreMenu
-          label="더보기"
-          title="PNG · PSD · 분할 저장 · 새로 시작"
+          label="⋯"
+          title="다른 형식 · 샘플 · 새로 시작"
           items={[
+            { label: 'JPG 한 장', hint: '전체를 그림 한 장으로', onClick: () => void doExport('jpg'), disabled: !hasCuts },
             { label: 'PNG 한 장', hint: '투명·무손실', onClick: () => void doExport('png'), disabled: !hasCuts },
             { label: 'PSD (레이어 유지)', hint: '포토샵·클립스튜디오용', onClick: () => void doExport('psd'), disabled: !hasCuts },
-            { label: '분할 저장 (올리기용)…', hint: '컷 사이에서 나눠 ZIP으로', onClick: () => setExportOpen(true), disabled: !hasCuts },
             ...(canOverwrite() ? [{ label: '다른 이름으로 저장…', hint: '저장 위치를 새로 골라요 (Ctrl+Shift+S)', onClick: () => void saveProject(true), disabled: !hasContent }] : []),
+            { label: '샘플 장면 넣기', hint: '콜라 + 흔들림 효과 예시', onClick: () => addCuts([createSampleCut(true)]), divider: true },
             { label: '새로 시작', hint: 'Ctrl+Z 로 되돌릴 수 있어요', onClick: newProject, disabled: !hasContent, danger: true, divider: true },
           ]}
         />
@@ -1219,13 +1334,13 @@ export default function Editor() {
             selLayerId={selLayerId}
             showHandles={tab === 'effects'}
             showOriginal={showOriginal}
-            onEditBubble={(id) => { setSelBubbleId(id); setSelLayerId(null); setTab('bubbles'); setFocusTick((n) => n + 1); }}
+            onEditBubble={(id) => { setSelBubbleId(id); setSelLayerId(null); setTab(bubbleTab(id)); setFocusTick((n) => n + 1); }}
             wand={wand}
             targetCutId={tCut?.id ?? null}
             activeMask={activeMask}
             onSelectCut={(id) => { setSelCutId(id); if (id !== selCutId) setSelEffectId(null); }}
             onReorderCut={reorderCut}
-            onSelectBubble={(id) => { setSelBubbleId(id); if (id) { setTab('bubbles'); setSelLayerId(null); } }}
+            onSelectBubble={(id) => { setSelBubbleId(id); if (id) { setTab(bubbleTab(id)); setSelLayerId(null); } }}
             onSelectLayer={(id) => { setSelLayerId(id); if (id) { setTab('bg'); setSelBubbleId(null); } }}
             onMaskOp={onMaskOp}
             onParams={setParams}
@@ -1248,9 +1363,9 @@ export default function Editor() {
 
       <aside className="panel">
         <div className="tabs">
-          {(['effects', 'materials', 'bubbles', 'bg', 'cuts'] as Tab[]).map((t) => (
+          {TAB_ORDER.map((t) => (
             <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>
-              {t === 'effects' ? '효과' : t === 'materials' ? '소재' : t === 'bubbles' ? '말풍선' : t === 'bg' ? '배경' : '컷'}
+              {TAB_LABELS[t]}
             </button>
           ))}
         </div>
@@ -1289,6 +1404,13 @@ export default function Editor() {
               onClearClip={() => setFxClip(null)}
               materials={allMaterials}
               onOpenMaterials={() => setTab('materials')}
+              tool={tool}
+              onTool={(t) => {
+                if (t !== 'select' && !project.cuts.length) return say('먼저 컷을 추가하세요');
+                setTool(t);
+                setSelLayerId(null);
+                setSelBubbleId(null);
+              }}
             />
           )}
           {tab === 'materials' && (
@@ -1302,7 +1424,23 @@ export default function Editor() {
               onDropFiles={(f) => void importMaterials(f)}
               onToCut={(m, fit) => void materialToCut(m, fit)}
               onToPage={(m) => void materialToPage(m)}
+              onToBack={(m) => void materialToPage(m, undefined, 'back')}
               onDelete={deleteMaterial}
+            />
+          )}
+          {tab === 'sfx' && (
+            <SfxPanel
+              bubble={selSfx}
+              styleId={sfxStyle}
+              onStyle={setSfxStyle}
+              onAdd={addSfx}
+              onChange={(patch, co) => selSfx && changeBubble(selSfx.id, patch, co)}
+              onFit={() => selSfx && commit((p) => ({ ...p, bubbles: p.bubbles.map((b) => (b.id === selSfx.id ? fitBubble(b) : b)) }))}
+              onDuplicate={() => selSfx && dupBubble(selSfx.id)}
+              onDelete={() => selSfx && deleteBubble(selSfx.id)}
+              onZ={(dir) => selSfx && moveBubbleZ(selSfx.id, dir)}
+              focusTick={focusTick}
+              hasCut={hasCuts}
             />
           )}
           {tab === 'bubbles' && (
@@ -1314,17 +1452,7 @@ export default function Editor() {
               focusTick={focusTick}
               onDuplicate={() => selBubble && dupBubble(selBubble.id)}
               onDelete={() => selBubble && deleteBubble(selBubble.id)}
-              onZ={(dir) =>
-                selBubble &&
-                commit((p) => {
-                  const i = p.bubbles.findIndex((b) => b.id === selBubble.id);
-                  const j = i + dir;
-                  if (j < 0 || j >= p.bubbles.length) return p;
-                  const arr = [...p.bubbles];
-                  [arr[i], arr[j]] = [arr[j], arr[i]];
-                  return { ...p, bubbles: arr };
-                })
-              }
+              onZ={(dir) => selBubble && moveBubbleZ(selBubble.id, dir)}
             />
           )}
           {tab === 'bg' && (
@@ -1375,6 +1503,8 @@ export default function Editor() {
               hasFxClip={!!fxClip}
               onPasteTo={(id) => pasteEffects(id)}
               onCut={(id, patch, co) => updateCut(id, (c) => ({ ...c, ...patch }), co ? `cut-${id}-${Object.keys(patch).join(',')}` : undefined)}
+              onSplit={(id, at) => void doSplitCut(id, at)}
+              onSlantJoint={slantJoint}
             />
           )}
         </div>

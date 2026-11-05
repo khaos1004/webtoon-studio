@@ -1,5 +1,6 @@
 import { PAGE_WIDTH, type Bubble, type Cut, type PageLayer, type Project } from './types';
 import { bubbleBounds, bubbleMarkup, bubblesSvgDocument } from './bubble';
+import { embeddedFontCss, fontStyleTag } from './fonts';
 import { loadImage, renderCutCanvas } from './imageIO';
 import { BASE_PARAMS } from './effectMeta';
 import { ensureMaterialPixels } from './materials';
@@ -32,6 +33,7 @@ export const cutFrame = (c: Cut) => ({
   radius: Math.max(0, c.radius ?? 0),
   border: Math.max(0, c.border ?? 0),
   borderColor: c.borderColor ?? '#000000',
+  style: c.borderStyle ?? 'solid',
 });
 
 /* ------------------------------ 저장 / 불러오기 ------------------------------ */
@@ -81,15 +83,114 @@ export function parseProject(text: string): Project {
 
 async function svgToImage(svg: string): Promise<HTMLImageElement> {
   const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-  return loadImage(url);
+  const img = await loadImage(url);
+  // SVG 안에 넣은 글꼴이 그려질 시간을 조금 준다(바로 그리면 기본 글꼴로 나올 때가 있다)
+  if (svg.includes('@font-face')) {
+    await img.decode?.().catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 80));
+  }
+  return img;
 }
 
-/** 프레임(좌우 여백·둥근 모서리·테두리)을 적용해서 컷 하나를 그린다 */
+/** 사선 컷이면 네 꼭짓점(왼위, 오위, 오아래, 왼아래), 아니면 null */
+export function cutPolygon(cut: Cut, top = 0): [number, number][] | null {
+  const st = cut.slantTop ?? 0;
+  const sb = cut.slantBottom ?? 0;
+  if (!st && !sb) return null;
+  const f = cutFrame(cut);
+  const L = f.inset;
+  const R = PAGE_WIDTH - f.inset;
+  const T = top;
+  const B = top + cut.height;
+  return [
+    [L, T + Math.max(0, -st)],
+    [R, T + Math.max(0, st)],
+    [R, B - Math.max(0, -sb)],
+    [L, B - Math.max(0, sb)],
+  ];
+}
+
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+function insetQuad(q: [number, number][], d: number): [number, number][] {
+  const [a, b, c, e] = q;
+  return [
+    [a[0] + d, a[1] + d],
+    [b[0] - d, b[1] + d],
+    [c[0] - d, c[1] - d],
+    [e[0] + d, e[1] - d],
+  ];
+}
+
+const polyD = (q: [number, number][]) => 'M' + q.map(([x, y]) => `${r2(x)} ${r2(y)}`).join('L') + 'Z';
+
+function roundRectD(x: number, y: number, w: number, h: number, r: number) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  return `M${r2(x + r)} ${r2(y)}H${r2(x + w - r)}A${r2(r)} ${r2(r)} 0 0 1 ${r2(x + w)} ${r2(y + r)}V${r2(y + h - r)}A${r2(r)} ${r2(r)} 0 0 1 ${r2(x + w - r)} ${r2(y + h)}H${r2(x + r)}A${r2(r)} ${r2(r)} 0 0 1 ${r2(x)} ${r2(y + h - r)}V${r2(y + r)}A${r2(r)} ${r2(r)} 0 0 1 ${r2(x + r)} ${r2(y)}Z`;
+}
+
+/** 거친 붓선: 변을 잘게 나눠 조금씩 흔든다(컷마다 모양 고정) */
+function roughD(q: [number, number][], amp: number, seed: string) {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
+  const rand = () => {
+    h = Math.imul(h ^ (h >>> 15), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    return ((h ^= h >>> 16) >>> 0) / 4294967296;
+  };
+  let d = '';
+  for (let i = 0; i < 4; i++) {
+    const [x0, y0] = q[i];
+    const [x1, y1] = q[(i + 1) % 4];
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    const n = Math.max(2, Math.round(len / 28));
+    const nx = -(y1 - y0) / (len || 1);
+    const ny = (x1 - x0) / (len || 1);
+    for (let k = 0; k < n; k++) {
+      const t = k / n;
+      const j = k === 0 ? 0 : (rand() - 0.5) * amp;
+      d += `${i === 0 && k === 0 ? 'M' : 'L'}${r2(x0 + (x1 - x0) * t + nx * j)} ${r2(y0 + (y1 - y0) * t + ny * j)}`;
+    }
+  }
+  return d + 'Z';
+}
+
+/** 컷 테두리 선(SVG path 문자열과 굵기). 화면과 내보내기가 같은 모양을 쓴다 */
+export function cutBorderPaths(cut: Cut, top = 0): { d: string; w: number }[] {
+  const f = cutFrame(cut);
+  if (f.border <= 0) return [];
+  const b = f.border;
+  const poly = cutPolygon(cut, top);
+  const L = f.inset;
+  const W = PAGE_WIDTH - f.inset * 2;
+  const quad = poly ?? ([[L, top], [L + W, top], [L + W, top + cut.height], [L, top + cut.height]] as [number, number][]);
+  const rounded = !poly && f.radius > 0;
+  const shape = (d: number) => (rounded ? roundRectD(L + d, top + d, W - d * 2, cut.height - d * 2, Math.max(0, f.radius - d)) : polyD(insetQuad(quad, d)));
+  switch (f.style) {
+    case 'double':
+      return [
+        { d: shape(b / 2), w: b },
+        { d: shape(b * 2.4), w: Math.max(1, b * 0.5) },
+      ];
+    case 'rough':
+      return [{ d: roughD(insetQuad(quad, b / 2), b * 0.9, cut.id), w: b }];
+    default:
+      return [{ d: shape(b / 2), w: b }];
+  }
+}
+
+/** 프레임(좌우 여백·둥근 모서리·사선·테두리)을 적용해서 컷 하나를 그린다 */
 export function drawCutFramed(ctx: CanvasRenderingContext2D, cut: Cut, canvas: HTMLCanvasElement, top: number) {
   const f = cutFrame(cut);
   const w = PAGE_WIDTH - f.inset * 2;
+  const poly = cutPolygon(cut, top);
   ctx.save();
-  if (f.radius > 0 || f.inset > 0) {
+  if (poly) {
+    ctx.beginPath();
+    poly.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath();
+    ctx.clip();
+  } else if (f.radius > 0 || f.inset > 0) {
     ctx.beginPath();
     if (f.radius > 0 && 'roundRect' in ctx) (ctx as CanvasRenderingContext2D & { roundRect: (...a: number[]) => void }).roundRect(f.inset, top, w, cut.height, f.radius);
     else ctx.rect(f.inset, top, w, cut.height);
@@ -97,15 +198,16 @@ export function drawCutFramed(ctx: CanvasRenderingContext2D, cut: Cut, canvas: H
   }
   ctx.drawImage(canvas, 0, top);
   ctx.restore();
-  if (f.border > 0) {
+  const paths = cutBorderPaths(cut, top);
+  if (paths.length) {
     ctx.save();
-    ctx.lineWidth = f.border;
     ctx.strokeStyle = f.borderColor;
-    ctx.beginPath();
-    const b = f.border / 2;
-    if (f.radius > 0 && 'roundRect' in ctx) (ctx as CanvasRenderingContext2D & { roundRect: (...a: number[]) => void }).roundRect(f.inset + b, top + b, w - f.border, cut.height - f.border, Math.max(0, f.radius - b));
-    else ctx.rect(f.inset + b, top + b, w - f.border, cut.height - f.border);
-    ctx.stroke();
+    ctx.lineJoin = f.style === 'rough' ? 'round' : 'miter';
+    ctx.lineCap = 'round';
+    for (const p of paths) {
+      ctx.lineWidth = p.w;
+      ctx.stroke(new Path2D(p.d));
+    }
     ctx.restore();
   }
 }
@@ -152,7 +254,8 @@ export async function renderStrip(project: Project, region?: StripRegion, cutCac
   drawPageLayers(ctx, project.layers, 'front', PAGE_WIDTH, total);
   ctx.restore();
   if (project.bubbles.length) {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${PAGE_WIDTH}" height="${h}" viewBox="0 ${y0} ${PAGE_WIDTH} ${h}">${project.bubbles.map(bubbleMarkup).join('')}</svg>`;
+    const css = await embeddedFontCss(project.bubbles);
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${PAGE_WIDTH}" height="${h}" viewBox="0 ${y0} ${PAGE_WIDTH} ${h}">${fontStyleTag(css)}${project.bubbles.map(bubbleMarkup).join('')}</svg>`;
     const img = await svgToImage(svg);
     ctx.drawImage(img, 0, 0);
   }
@@ -230,7 +333,8 @@ async function bubbleCanvas(b: Bubble) {
   const bb = bubbleBounds(b);
   const w = Math.ceil(bb.w);
   const h = Math.ceil(bb.h);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="${bb.x} ${bb.y} ${bb.w} ${bb.h}">${bubbleMarkup(b)}</svg>`;
+  const css = await embeddedFontCss([b]);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="${bb.x} ${bb.y} ${bb.w} ${bb.h}">${fontStyleTag(css)}${bubbleMarkup(b)}</svg>`;
   const img = await svgToImage(svg);
   const canvas = document.createElement('canvas');
   canvas.width = w;

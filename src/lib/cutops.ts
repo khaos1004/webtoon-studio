@@ -41,3 +41,38 @@ export function duplicateEffect(e: Effect): Effect {
 function structuredCloneSafe<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
 }
+
+/**
+ * 컷을 세로로 나눈다. cuts = 나눌 위치(컷 위에서부터 px, 오름차순).
+ * 효과가 있으면 효과까지 그림에 합쳐서 나눈다(나뉜 컷에는 효과 레이어가 없다).
+ * 첫 조각은 원래 컷의 위 간격·위 사선을, 마지막 조각은 아래 사선을 이어받는다.
+ */
+export async function splitCut(cut: Cut, at: number[]): Promise<Cut[]> {
+  const { renderCutCanvas } = await import('./imageIO');
+  const canvas = await renderCutCanvas(cut);
+  const ys = [0, ...at.map((y) => Math.round(y)).filter((y) => y > 20 && y < cut.height - 20), cut.height];
+  const uniq = [...new Set(ys)].sort((a, b) => a - b);
+  const out: Cut[] = [];
+  for (let i = 0; i < uniq.length - 1; i++) {
+    const y0 = uniq[i];
+    const h = uniq[i + 1] - y0;
+    const c = document.createElement('canvas');
+    c.width = canvas.width;
+    c.height = h;
+    c.getContext('2d')!.drawImage(canvas, 0, -y0);
+    const first = i === 0;
+    const last = i === uniq.length - 2;
+    const { gapBefore, slantTop, slantBottom, ...rest } = cut;
+    out.push({
+      ...rest,
+      id: uid(),
+      src: cut.bg === 'transparent' ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.95),
+      height: h,
+      effects: [],
+      ...(first && gapBefore !== undefined ? { gapBefore } : {}),
+      ...(first && slantTop ? { slantTop } : {}),
+      ...(last && slantBottom ? { slantBottom } : {}),
+    });
+  }
+  return out;
+}

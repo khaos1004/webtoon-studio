@@ -145,6 +145,11 @@ export interface Cut {
   borderColor?: string;
   /** 이 컷 위쪽 간격(px). 없으면 프로젝트 기본 간격(gap)을 쓴다. 첫 컷에는 적용되지 않는다 */
   gapBefore?: number;
+  /** 사선 컷: 위/아래 가장자리 기울기(px). + 면 오른쪽이 아래로 내려간다 */
+  slantTop?: number;
+  slantBottom?: number;
+  /** 테두리 모양: 실선 / 두 줄 / 거친 붓선 */
+  borderStyle?: 'solid' | 'double' | 'rough';
 }
 
 export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'soft-light' | 'add';
@@ -191,7 +196,41 @@ export type BubbleKind =
   | 'soft'
   | 'horror'
   | 'whisper'
-  | 'narration';
+  | 'narration'
+  | 'box'
+  | 'phone'
+  | 'wobble'
+  | 'mono'
+  | 'flash'
+  | 'sfx';
+
+/** 글자 의성어(효과음) 스타일. kind === 'sfx' 일 때 쓴다 */
+export interface SfxStyle {
+  /** 그라데이션 아래쪽 색 (위쪽은 textColor) */
+  fill2: string;
+  gradient: boolean;
+  /** 바깥 테두리 (안쪽 테두리는 stroke / strokeWidth) */
+  stroke2: string;
+  stroke2Width: number;
+  /** 회전(도) · 기울임(도) */
+  rotation: number;
+  skew: number;
+  /** 글자마다 들쭉날쭉 0..1 */
+  jitter: number;
+  /** 자간 -0.3..1 */
+  spacing: number;
+  /** 휘어짐 -1..1 (위로 볼록 +) */
+  arc: number;
+  /** 입체(두께) px · 색 · 방향(도) */
+  extrude: number;
+  extrudeColor: string;
+  extrudeAngle: number;
+  /** 잔상 개수 0..6 · 방향(도) */
+  motion: number;
+  motionAngle: number;
+  /** 글자 크기 점점 커지기(+)/작아지기(-) -1..1 */
+  grow: number;
+}
 
 export interface Bubble {
   id: string;
@@ -214,6 +253,18 @@ export interface Bubble {
   /** -1..1 꼬리 휘어짐 */
   tailCurve: number;
   seed: number;
+  /** 글꼴 id (lib/fonts). 없으면 기본 고딕 */
+  font?: string;
+  /** 세로쓰기 */
+  vertical?: boolean;
+  /** 굵게 (없으면 말풍선 종류 기본값) */
+  bold?: boolean;
+  /** 글자 정렬 */
+  align?: 'center' | 'left';
+  /** 꼬리 두 개(두 사람이 함께 말할 때). 두 번째 꼬리 끝 */
+  tail2?: { x: number; y: number } | null;
+  /** 의성어 스타일 (kind === 'sfx') */
+  sfx?: SfxStyle;
 }
 
 /** 가져온 소재(PNG/JPG/SVG 등). 톤·효과선·질감·스탬프 용도 */

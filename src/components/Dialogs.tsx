@@ -96,11 +96,55 @@ const num = (s: string, fallback: number) => {
 
 const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(2);
 
+interface Platform {
+  id: string;
+  label: string;
+  width: number;
+  maxH: number;
+  format: 'jpg' | 'png';
+  /** 장당 / 전체 용량 한도(MB). 0 이면 확인 안 함 */
+  perMB: number;
+  totalMB: number;
+  note: string;
+}
+
+/** 올릴 곳별 기본값. 플랫폼 규격은 바뀔 수 있으니 올리기 전에 공지를 확인하세요 */
+export const PLATFORMS: Platform[] = [
+  { id: 'naver', label: '네이버 도전만화', width: 690, maxH: 1280, format: 'jpg', perMB: 5, totalMB: 50, note: '가로 690px 고정 · JPG · 장당 5MB · 회차 전체 50MB 이하' },
+  { id: 'daum', label: '다음 웹툰리그', width: 760, maxH: 7000, format: 'jpg', perMB: 4, totalMB: 0, note: '가로 760px · 세로 7000px 단위 · 장당 4MB 이하' },
+  { id: 'web', label: '일반 웹·블로그', width: 800, maxH: 1280, format: 'jpg', perMB: 0, totalMB: 0, note: '가로 800px · 세로 1280px 이하로 나눠요' },
+  { id: 'insta', label: '인스타그램', width: 1080, maxH: 1350, format: 'jpg', perMB: 8, totalMB: 0, note: '가로 1080px · 4:5(1350px) 이하로 나눠요 · 한 게시물 최대 10장' },
+  { id: 'x', label: 'X(트위터)', width: 1080, maxH: 2000, format: 'jpg', perMB: 5, totalMB: 0, note: '가로 1080px · 장당 5MB 이하 · 한 게시물 4장' },
+  { id: 'original', label: '원본 그대로', width: PAGE_WIDTH, maxH: 0, format: 'png', perMB: 0, totalMB: 0, note: '작업 크기(900px) 그대로 한 장' },
+];
+
+const LAST_PLATFORM = 'wls-export-platform';
+
 export function ExportDialog({ project, onClose, onDone }: { project: Project; onClose: () => void; onDone: (msg: string) => void }) {
-  const [format, setFormat] = useState<'jpg' | 'png'>('jpg');
-  const [widthStr, setWidthStr] = useState(String(PAGE_WIDTH));
-  const [slice, setSlice] = useState(true);
-  const [maxHStr, setMaxHStr] = useState('1280');
+  const initial = (() => {
+    try {
+      return PLATFORMS.find((x) => x.id === localStorage.getItem(LAST_PLATFORM)) ?? PLATFORMS[0];
+    } catch {
+      return PLATFORMS[0];
+    }
+  })();
+  const [platform, setPlatform] = useState<Platform | null>(initial);
+  const [format, setFormat] = useState<'jpg' | 'png'>(initial.format);
+  const [widthStr, setWidthStr] = useState(String(initial.width));
+  const [slice, setSlice] = useState(initial.maxH > 0);
+  const [maxHStr, setMaxHStr] = useState(String(initial.maxH || 1280));
+  const pick = (pf: Platform) => {
+    setPlatform(pf);
+    setFormat(pf.format);
+    setWidthStr(String(pf.width));
+    setSlice(pf.maxH > 0);
+    if (pf.maxH > 0) setMaxHStr(String(pf.maxH));
+    try {
+      localStorage.setItem(LAST_PLATFORM, pf.id);
+    } catch {
+      /* 저장 못 해도 괜찮다 */
+    }
+  };
   const [quality, setQuality] = useState(92);
   const [progress, setProgress] = useState<{ done: number; count: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -119,7 +163,11 @@ export function ExportDialog({ project, onClose, onDone }: { project: Project; o
       const res = await exportSliced(project, { format, width, maxHeight: maxH, quality: quality / 100 }, (done, count) => setProgress({ done, count }));
       downloadBlob(res.blob, res.filename);
       const biggest = Math.max(...res.sizes);
-      onDone(`${res.count}장을 저장했어요 · 가장 큰 파일 ${mb(biggest)}MB`);
+      const total = res.sizes.reduce((a, b) => a + b, 0);
+      const warn: string[] = [];
+      if (platform?.perMB && biggest > platform.perMB * 1024 * 1024) warn.push(`장당 ${platform.perMB}MB 를 넘는 파일이 있어요 — JPG 품질을 낮추거나 세로를 줄여 다시 저장하세요`);
+      if (platform?.totalMB && total > platform.totalMB * 1024 * 1024) warn.push(`전체 ${mb(total)}MB 로 ${platform.totalMB}MB 한도를 넘어요`);
+      onDone(`${res.count}장을 저장했어요 · 가장 큰 파일 ${mb(biggest)}MB${warn.length ? ' · ⚠ ' + warn.join(' / ') : ''}`);
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -130,21 +178,34 @@ export function ExportDialog({ project, onClose, onDone }: { project: Project; o
   return (
     <div className="modalBack" onPointerDown={(e) => { if (e.target === e.currentTarget && !running) onClose(); }}>
       <div className="modal" role="dialog" aria-modal="true" aria-label="분할 저장">
-        <h3>분할 저장 (올리기용)</h3>
-        <p className="hint">긴 웹툰을 컷과 컷 사이에서 나눠 저장해요. 여러 장이면 ZIP 하나로 묶여요. 올릴 곳마다 권장 가로·세로·용량이 달라서 숫자를 직접 맞출 수 있어요.</p>
+        <h3>올리기용으로 저장</h3>
+        <p className="hint">올릴 곳을 고르면 크기가 자동으로 맞춰져요. 긴 웹툰은 컷과 컷 사이에서 나눠 ZIP 하나로 묶어요.</p>
+
+        <div className="platformGrid">
+          {PLATFORMS.map((pf) => (
+            <button key={pf.id} className={`platformBtn ${platform?.id === pf.id ? 'on' : ''}`} onClick={() => pick(pf)}>
+              <b>{pf.label}</b>
+              <span>{pf.width}px{pf.maxH ? ` · ${pf.maxH}px씩` : ' · 한 장'}</span>
+            </button>
+          ))}
+        </div>
+        {platform && <p className="hint tip">{platform.note}. 플랫폼 규격은 바뀔 수 있으니 올리기 전에 공지를 한 번 확인하세요.</p>}
+
+        <details className="note" open={!platform}>
+          <summary>직접 조절</summary>
 
         <div className="field">
           <span className="fieldLabel">형식</span>
           <div className="seg">
-            <button className={format === 'jpg' ? 'on' : ''} onClick={() => setFormat('jpg')}>JPG</button>
-            <button className={format === 'png' ? 'on' : ''} onClick={() => setFormat('png')}>PNG</button>
+            <button className={format === 'jpg' ? 'on' : ''} onClick={() => { setFormat('jpg'); setPlatform(null); }}>JPG</button>
+            <button className={format === 'png' ? 'on' : ''} onClick={() => { setFormat('png'); setPlatform(null); }}>PNG</button>
           </div>
         </div>
 
         <div className="field">
           <span className="fieldLabel">가로(px)</span>
           <div className="chipRow">
-            <input className="text numInput" type="number" min={100} max={4000} value={widthStr} onChange={(e) => setWidthStr(e.target.value)} aria-label="가로" />
+            <input className="text numInput" type="number" min={100} max={4000} value={widthStr} onChange={(e) => { setWidthStr(e.target.value); setPlatform(null); }} aria-label="가로" />
             {[PAGE_WIDTH, 800, 720, 690].map((w) => (
               <button key={w} className={`chip ${width === w ? 'on' : ''}`} onClick={() => setWidthStr(String(w))}>{w === PAGE_WIDTH ? `${w} (원본)` : w}</button>
             ))}
@@ -158,7 +219,7 @@ export function ExportDialog({ project, onClose, onDone }: { project: Project; o
           <div className="field">
             <span className="fieldLabel">조각 하나의 최대 세로(px)</span>
             <div className="chipRow">
-              <input className="text numInput" type="number" min={200} max={20000} value={maxHStr} onChange={(e) => setMaxHStr(e.target.value)} aria-label="최대 세로" />
+              <input className="text numInput" type="number" min={200} max={20000} value={maxHStr} onChange={(e) => { setMaxHStr(e.target.value); setPlatform(null); }} aria-label="최대 세로" />
               {[1280, 1500, 2000, 5000].map((h) => (
                 <button key={h} className={`chip ${maxH === h ? 'on' : ''}`} onClick={() => setMaxHStr(String(h))}>{h}</button>
               ))}
@@ -172,6 +233,7 @@ export function ExportDialog({ project, onClose, onDone }: { project: Project; o
             <input type="range" min={50} max={100} step={1} value={quality} onChange={(e) => setQuality(parseInt(e.target.value, 10))} />
           </label>
         )}
+        </details>
 
         <p className="hint exportInfo" data-testid="export-info">
           전체 {plan.total.toLocaleString()}px → 출력 {plan.outWidth}×{outTotal.toLocaleString()}px · <b>{plan.ranges.length}장</b>

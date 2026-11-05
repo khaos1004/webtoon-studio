@@ -1,6 +1,7 @@
-import type { Bubble, BubbleKind } from './types';
+import type { Bubble, BubbleKind, SfxStyle } from './types';
 import { uid } from './types';
 import { mulberry32 } from './effects';
+import { fontStack, fontWeight } from './fonts';
 
 /**
  * SVG 말풍선 시스템
@@ -9,7 +10,8 @@ import { mulberry32 } from './effects';
  *   본체와 꼬리의 이음새에 선이 남지 않게 한다 (바깥쪽 절반만 보이므로 선 굵기는 strokeWidth 와 같다)
  */
 
-export const BUBBLE_KINDS: BubbleKind[] = ['speech', 'thought', 'shout', 'shock', 'soft', 'horror', 'whisper', 'narration'];
+/** 말풍선 탭에 보이는 종류(의성어 'sfx' 는 의성어 탭에서 만든다) */
+export const BUBBLE_KINDS: BubbleKind[] = ['speech', 'box', 'thought', 'shout', 'shock', 'flash', 'soft', 'wobble', 'phone', 'horror', 'whisper', 'narration', 'mono'];
 
 export const BUBBLE_LABELS: Record<BubbleKind, string> = {
   speech: '기본 대사',
@@ -20,9 +22,13 @@ export const BUBBLE_LABELS: Record<BubbleKind, string> = {
   horror: '공포',
   whisper: '속삭임',
   narration: '나레이션',
+  box: '사각 대사',
+  phone: '전화·기계음',
+  wobble: '떨리는 목소리',
+  mono: '독백 (검정)',
+  flash: '속마음 플래시',
+  sfx: '의성어',
 };
-
-const FONT = `'Pretendard','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif`;
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const f = (n: number) => Math.round(n * 100) / 100;
@@ -64,9 +70,73 @@ export function defaultBubble(kind: BubbleKind, x: number, y: number): Bubble {
       return { ...base, text: '(작게) 비밀이야', w: 250, h: 120, stroke: '#666666', strokeWidth: 1.8, textColor: '#444444', fontSize: 20, tailWidth: 26, tailY: y + 120 + 52 };
     case 'narration':
       return { ...base, text: '그날 밤, 모든 것이 바뀌었다.', w: 330, h: 90, fontSize: 21, tail: false, strokeWidth: 1.6, fill: '#fffdf2' };
+    case 'box':
+      return { ...base, text: '알겠어.', w: 230, h: 110, tailWidth: 28, tailY: y + 110 + 50 };
+    case 'phone':
+      return { ...base, text: '여보세요?', w: 250, h: 140, strokeWidth: 2, tailWidth: 26, tailY: y + 140 + 56 };
+    case 'wobble':
+      return { ...base, text: '그, 그게…', w: 250, h: 150, strokeWidth: 2, fontSize: 24 };
+    case 'mono':
+      return { ...base, text: '(이상하다…)', w: 300, h: 86, fontSize: 21, tail: false, strokeWidth: 0, fill: '#121212', textColor: '#ffffff' };
+    case 'flash':
+      return { ...base, text: '!', w: 300, h: 210, fontSize: 40, strokeWidth: 1.4, tail: false, bold: true };
+    case 'sfx':
+      return defaultSfx(x, y, '쾅');
     default:
       return base;
   }
+}
+
+/* ------------------------------ 의성어 ------------------------------ */
+
+export const DEFAULT_SFX: SfxStyle = {
+  fill2: '#ff3b30',
+  gradient: false,
+  stroke2: '#000000',
+  stroke2Width: 0,
+  rotation: -6,
+  skew: -8,
+  jitter: 0.25,
+  spacing: -0.05,
+  arc: 0,
+  extrude: 0,
+  extrudeColor: '#000000',
+  extrudeAngle: 45,
+  motion: 0,
+  motionAngle: 180,
+  grow: 0,
+};
+
+export const sfxStyleOf = (b: Pick<Bubble, 'sfx'>): SfxStyle => ({ ...DEFAULT_SFX, ...(b.sfx ?? {}) });
+
+/** 글자 의성어 하나. x, y 는 왼쪽 위. 크기는 글자 길이에 맞춘다 */
+export function defaultSfx(x: number, y: number, text: string, patch: Partial<Bubble> = {}): Bubble {
+  const b: Bubble = {
+    id: uid(),
+    kind: 'sfx',
+    x,
+    y,
+    w: 200,
+    h: 130,
+    text,
+    fontSize: 60,
+    textColor: '#111111',
+    fill: '#ffffff',
+    stroke: '#ffffff',
+    strokeWidth: 6,
+    opacity: 1,
+    tail: false,
+    tailX: x,
+    tailY: y,
+    tailWidth: 30,
+    tailCurve: 0,
+    seed: Math.floor(Math.random() * 90) + 1,
+    font: 'black-han-sans',
+    bold: true,
+    ...patch,
+    sfx: { ...DEFAULT_SFX, ...(patch.sfx ?? {}) },
+  };
+  return fitSfx(b, patch.h ?? 130);
 }
 
 /* ------------------------------ 기하 ------------------------------ */
@@ -174,6 +244,19 @@ function horrorPath(cx: number, cy: number, a: number, b: number, seed: number) 
   return d + 'Z';
 }
 
+function wobblePath(cx: number, cy: number, a: number, b: number, seed: number) {
+  const s = (seed % 17) * 0.37;
+  const N = 200;
+  let d = '';
+  for (let i = 0; i < N; i++) {
+    const t = (i / N) * Math.PI * 2;
+    const base = superRadius(1, 1, 2.5, t);
+    const r = base * (0.97 + 0.03 * Math.sin(18 * t + s) + 0.012 * Math.sin(31 * t + s * 2));
+    d += `${i === 0 ? 'M' : 'L'}${f(cx + a * r * Math.cos(t))} ${f(cy + b * r * Math.sin(t))}`;
+  }
+  return d + 'Z';
+}
+
 function roundRectPath(x: number, y: number, w: number, h: number, r: number) {
   r = Math.min(r, w / 2, h / 2);
   return `M${f(x + r)} ${f(y)}H${f(x + w - r)}Q${f(x + w)} ${f(y)} ${f(x + w)} ${f(y + r)}V${f(y + h - r)}Q${f(x + w)} ${f(y + h)} ${f(x + w - r)} ${f(y + h)}H${f(x + r)}Q${f(x)} ${f(y + h)} ${f(x)} ${f(y + h - r)}V${f(y + r)}Q${f(x)} ${f(y)} ${f(x + r)} ${f(y)}Z`;
@@ -187,9 +270,13 @@ function geometry(b: Bubble): Shape[] {
   const shapes: Shape[] = [];
   const addTail = (n: number, tw = b.tailWidth) => {
     if (!b.tail) return;
-    const r = superRadius(a, hh, n, Math.atan2(b.tailY - cy, b.tailX - cx));
-    const t = tailShape(cx, cy, r, b.tailX, b.tailY, tw, b.tailCurve);
-    if (t) shapes.push(t);
+    const ends: [number, number, number][] = [[b.tailX, b.tailY, b.tailCurve]];
+    if (b.tail2) ends.push([b.tail2.x, b.tail2.y, -b.tailCurve]);
+    for (const [ex, ey, cv] of ends) {
+      const r = superRadius(a, hh, n, Math.atan2(ey - cy, ex - cx));
+      const t = tailShape(cx, cy, r, ex, ey, tw, cv);
+      if (t) shapes.push(t);
+    }
   };
   switch (b.kind) {
     case 'speech':
@@ -243,7 +330,30 @@ function geometry(b: Bubble): Shape[] {
       addTail(2, b.tailWidth * 0.8);
       break;
     case 'narration':
+    case 'mono':
       shapes.push({ tag: 'path', d: roundRectPath(b.x, b.y, b.w, b.h, 2) });
+      break;
+    case 'box':
+      shapes.push({ tag: 'path', d: roundRectPath(b.x, b.y, b.w, b.h, Math.min(14, b.h / 4)) });
+      addTail(6);
+      break;
+    case 'phone': {
+      const perim = 2 * Math.PI * Math.sqrt((a * a + hh * hh) / 2);
+      shapes.push({ tag: 'path', d: burstPath(cx, cy, a, hh, Math.max(24, Math.round(perim / 16)), 0.93, 0, b.seed) });
+      addTail(2);
+      break;
+    }
+    case 'wobble':
+      shapes.push({ tag: 'path', d: wobblePath(cx, cy, a, hh, b.seed) });
+      addTail(2.5);
+      break;
+    case 'flash': {
+      const perim = 2 * Math.PI * Math.sqrt((a * a + hh * hh) / 2);
+      shapes.push({ tag: 'path', d: burstPath(cx, cy, a, hh, Math.max(36, Math.round(perim / 13)), 0.82, 0.55, b.seed) });
+      addTail(2);
+      break;
+    }
+    case 'sfx':
       break;
   }
   return shapes;
@@ -292,26 +402,221 @@ const TEXT_AREA: Record<BubbleKind, { w: number; h: number }> = {
   soft: { w: 0.86, h: 0.7 },
   horror: { w: 0.74, h: 0.6 },
   narration: { w: 0.92, h: 0.76 },
+  box: { w: 0.86, h: 0.72 },
+  phone: { w: 0.72, h: 0.6 },
+  wobble: { w: 0.74, h: 0.62 },
+  mono: { w: 0.92, h: 0.76 },
+  flash: { w: 0.52, h: 0.44 },
+  sfx: { w: 1, h: 1 },
 };
 
+/** 세로쓰기에서 눕혀 쓰는 문장부호 */
+const ROTATE_V = /[…~\-—–()\[\]{}<>〈〉「」『』:;=]/;
+
+const isBoldKind = (k: BubbleKind) => k === 'shout' || k === 'shock' || k === 'flash';
+
+function textStyle(b: Bubble) {
+  const bold = b.bold ?? isBoldKind(b.kind);
+  const custom = b.font && b.font !== 'default';
+  const weight = custom ? fontWeight(b.font, bold) : bold ? 800 : b.kind === 'soft' ? 600 : 500;
+  const italic = b.kind === 'shock' && !custom ? ' font-style="italic"' : '';
+  const ls = b.kind === 'horror' ? ' letter-spacing="1.2"' : '';
+  return `font-family="${fontStack(b.font)}" font-size="${b.fontSize}" font-weight="${weight}"${italic}${ls} fill="${esc(b.textColor)}"`;
+}
+
+/** 세로쓰기: 문단마다 오른쪽에서 왼쪽으로 줄을 놓는다 */
+function verticalColumns(b: Bubble) {
+  const area = TEXT_AREA[b.kind];
+  const step = b.fontSize * 1.06;
+  const maxPer = Math.max(1, Math.floor((b.h * area.h) / step));
+  const cols: string[][] = [];
+  for (const para of b.text.split('\n')) {
+    const chars = [...para];
+    if (!chars.length) cols.push([]);
+    for (let i = 0; i < chars.length; i += maxPer) cols.push(chars.slice(i, i + maxPer));
+  }
+  return { cols, step, colW: b.fontSize * 1.4 };
+}
+
+
 function textMarkup(b: Bubble) {
+  if (b.vertical) {
+    // 눕혀 쓰는 문장부호는 <text> 하나씩(tspan 은 회전이 안 된다)
+    const { cols, step, colW } = verticalColumns(b);
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    const longest = Math.max(1, ...cols.map((c) => c.length));
+    const totalW = cols.length * colW;
+    const y0 = cy - ((longest - 1) * step) / 2;
+    let plain = '';
+    let rotated = '';
+    cols.forEach((col, i) => {
+      const x = cx + totalW / 2 - colW * (i + 0.5);
+      col.forEach((ch, j) => {
+        const y = y0 + j * step;
+        if (ROTATE_V.test(ch)) rotated += `<text x="${f(x)}" y="${f(y)}" transform="rotate(90 ${f(x)} ${f(y)})">${esc(ch)}</text>`;
+        else if (ch.trim()) plain += `<tspan x="${f(x)}" y="${f(y)}">${esc(ch)}</tspan>`;
+      });
+    });
+    return `<g ${textStyle(b)} text-anchor="middle" dominant-baseline="central"><text>${plain}</text>${rotated}</g>`;
+  }
   const area = TEXT_AREA[b.kind];
   const lines = wrapText(b.text, b.w * area.w, b.fontSize);
   const lh = b.fontSize * 1.32;
-  const cx = b.x + b.w / 2;
+  const left = b.align === 'left';
+  const tx = left ? b.x + (b.w * (1 - area.w)) / 2 : b.x + b.w / 2;
   const cy = b.y + b.h / 2;
   const top = cy - ((lines.length - 1) * lh) / 2;
-  const weight = b.kind === 'shout' || b.kind === 'shock' ? 800 : b.kind === 'soft' ? 600 : 500;
-  const italic = b.kind === 'shock' ? ' font-style="italic"' : '';
-  const ls = b.kind === 'horror' ? ' letter-spacing="1.2"' : '';
-  const spans = lines.map((ln, i) => `<tspan x="${f(cx)}" y="${f(top + i * lh)}">${esc(ln) || ' '}</tspan>`).join('');
-  return `<text font-family="${FONT}" font-size="${b.fontSize}" font-weight="${weight}"${italic}${ls} fill="${esc(b.textColor)}" text-anchor="middle" dominant-baseline="central">${spans}</text>`;
+  const spans = lines.map((ln, i) => `<tspan x="${f(tx)}" y="${f(top + i * lh)}">${esc(ln) || ' '}</tspan>`).join('');
+  return `<text ${textStyle(b)} text-anchor="${left ? 'start' : 'middle'}" dominant-baseline="central">${spans}</text>`;
+}
+
+/* ------------------------------ 의성어 그리기 ------------------------------ */
+
+const SFX_UNIT = 100;
+
+interface Glyph {
+  c: string;
+  x: number;
+  y: number;
+  r: number;
+  s: number;
+}
+
+/** 의성어 글자 배치(단위 좌표, 가운데가 0,0). W·H 는 자연스러운 크기 */
+export function sfxLayout(b: Pick<Bubble, 'text' | 'vertical' | 'seed' | 'sfx'>) {
+  const st = sfxStyleOf(b);
+  const rand = mulberry32((b.seed || 1) * 7919);
+  const lines = b.text.split('\n').map((l) => [...l]);
+  const fs = SFX_UNIT;
+  const glyphs: Glyph[] = [];
+  const j = Math.max(0, Math.min(1, st.jitter));
+  const sp = Math.max(-0.4, st.spacing);
+  let W: number;
+  let H: number;
+  if (!b.vertical) {
+    const lh = fs * 1.08;
+    const widths = lines.map((l) => l.reduce((w, c) => w + charW(c, fs) * (1 + sp), 0));
+    W = Math.max(fs * 0.6, ...widths);
+    H = Math.max(1, lines.length) * lh;
+    lines.forEach((l, li) => {
+      const lw = Math.max(1, widths[li]);
+      let x = -lw / 2;
+      const y0 = -H / 2 + lh * (li + 0.5);
+      const n = l.length;
+      l.forEach((c, i) => {
+        const cw = charW(c, fs) * (1 + sp);
+        const cx = x + cw / 2;
+        x += cw;
+        if (!c.trim()) return;
+        const u = n > 1 ? (i / (n - 1)) * 2 - 1 : 0;
+        const bend = st.arc * W * 0.18;
+        const arcY = -bend * (1 - u * u);
+        const arcR = (Math.atan2(2 * bend * u, lw / 2) * 180) / Math.PI;
+        glyphs.push({
+          c,
+          x: cx + (rand() - 0.5) * j * fs * 0.14,
+          y: y0 + arcY + (rand() - 0.5) * j * fs * 0.5,
+          r: arcR + (rand() - 0.5) * j * 36,
+          s: (1 + st.grow * u * 0.45) * (1 + (rand() - 0.5) * j * 0.36),
+        });
+      });
+    });
+  } else {
+    const colW = fs * 1.12;
+    const step = fs * (1 + sp) * 0.98;
+    const heights = lines.map((l) => l.length * step);
+    H = Math.max(fs * 0.6, ...heights);
+    W = Math.max(1, lines.length) * colW;
+    lines.forEach((l, li) => {
+      const lh = Math.max(1, heights[li]);
+      const x0 = W / 2 - colW * (li + 0.5);
+      const n = l.length;
+      l.forEach((c, i) => {
+        const y = -lh / 2 + step * (i + 0.5);
+        if (!c.trim()) return;
+        const u = n > 1 ? (i / (n - 1)) * 2 - 1 : 0;
+        const bend = st.arc * H * 0.18;
+        const arcX = bend * (1 - u * u);
+        const arcR = -(Math.atan2(2 * bend * u, lh / 2) * 180) / Math.PI;
+        glyphs.push({
+          c,
+          x: x0 + arcX + (rand() - 0.5) * j * fs * 0.5,
+          y: y + (rand() - 0.5) * j * fs * 0.14,
+          r: arcR + (rand() - 0.5) * j * 36 + (ROTATE_V.test(c) ? 90 : 0),
+          s: (1 + st.grow * u * 0.45) * (1 + (rand() - 0.5) * j * 0.36),
+        });
+      });
+    });
+  }
+  return { glyphs, W, H };
+}
+
+/** 글자 비율에 맞춰 상자 크기를 다시 정한다(높이는 h 로, 가운데는 그대로) */
+export function fitSfx(b: Bubble, h = b.h): Bubble {
+  const { W, H } = sfxLayout(b);
+  const nh = Math.max(30, h);
+  const nw = Math.max(30, (nh * W) / H);
+  const cx = b.x + b.w / 2;
+  const cy = b.y + b.h / 2;
+  return { ...b, w: Math.round(nw), h: Math.round(nh), x: Math.round(cx - nw / 2), y: Math.round(cy - nh / 2) };
+}
+
+function sfxMarkup(b: Bubble): string {
+  const st = sfxStyleOf(b);
+  const { glyphs, W, H } = sfxLayout(b);
+  const sx = b.w / W;
+  const sy = b.h / H;
+  const k = Math.sqrt(Math.abs(sx * sy)) || 1;
+  const cx = b.x + b.w / 2;
+  const cy = b.y + b.h / 2;
+  const gid = `sfx-${b.id}`;
+  const weight = fontWeight(b.font, b.bold ?? true, 900, 600);
+  const glyphMarkup = glyphs
+    .map((g) => `<text x="${f(g.x)}" y="${f(g.y)}" font-size="${f(SFX_UNIT * g.s)}"${g.r ? ` transform="rotate(${f(g.r)} ${f(g.x)} ${f(g.y)})"` : ''}>${esc(g.c)}</text>`)
+    .join('');
+  const grad = st.gradient
+    ? `<linearGradient id="${gid}-gr" x1="0" y1="0" x2="0" y2="1"><stop offset="0.12" stop-color="${esc(b.textColor)}"/><stop offset="0.95" stop-color="${esc(st.fill2)}"/></linearGradient>`
+    : '';
+  const defs = `<defs><g id="${gid}" font-family="${fontStack(b.font)}" font-weight="${weight}" text-anchor="middle" dominant-baseline="central" stroke-linejoin="round" stroke-linecap="round">${glyphMarkup}</g>${grad}</defs>`;
+  const use = (attrs: string) => `<use href="#${gid}" ${attrs}/>`;
+  const sw1 = Math.max(0, b.strokeWidth);
+  const sw2 = Math.max(0, st.stroke2Width);
+  const outerW = ((sw1 + sw2) * 2) / k;
+  const outerColor = sw2 > 0 ? st.stroke2 : b.stroke;
+  const layers: string[] = [];
+  // 잔상: 멀리 있는 것부터
+  const mot = Math.max(0, Math.min(8, Math.round(st.motion)));
+  if (mot) {
+    const ma = (st.motionAngle * Math.PI) / 180;
+    for (let m = mot; m >= 1; m--) {
+      const d = m * b.h * 0.2;
+      const op = 0.55 * (1 - m / (mot + 1));
+      layers.push(`<g opacity="${f(op)}" transform="translate(${f((Math.cos(ma) * d) / sx)} ${f((Math.sin(ma) * d) / sy)})">${outerW > 0 ? use(`fill="${esc(outerColor)}" stroke="${esc(outerColor)}" stroke-width="${f(outerW)}"`) : ''}${use(`fill="${esc(b.textColor)}"`)}</g>`);
+    }
+  }
+  // 입체(두께)
+  const ext = Math.max(0, st.extrude);
+  if (ext > 0) {
+    const ea = (st.extrudeAngle * Math.PI) / 180;
+    const steps = Math.min(40, Math.ceil(ext / 1.2));
+    for (let i = steps; i >= 1; i--) {
+      const d = (ext * i) / steps;
+      layers.push(use(`transform="translate(${f((Math.cos(ea) * d) / sx)} ${f((Math.sin(ea) * d) / sy)})" fill="${esc(st.extrudeColor)}" stroke="${esc(st.extrudeColor)}" stroke-width="${f(Math.max(outerW, 0.01))}"`));
+    }
+  }
+  if (sw2 > 0) layers.push(use(`fill="${esc(st.stroke2)}" stroke="${esc(st.stroke2)}" stroke-width="${f(outerW)}"`));
+  if (sw1 > 0) layers.push(use(`fill="${esc(b.stroke)}" stroke="${esc(b.stroke)}" stroke-width="${f((sw1 * 2) / k)}"`));
+  layers.push(use(`fill="${st.gradient ? `url(#${gid}-gr)` : esc(b.textColor)}"`));
+  const tf = `translate(${f(cx)} ${f(cy)}) rotate(${f(st.rotation)}) skewX(${f(st.skew)}) scale(${f(sx)} ${f(sy)})`;
+  return `<g data-bubble="${b.id}" opacity="${b.opacity}">${defs}<g transform="${tf}">${layers.join('')}</g></g>`;
 }
 
 /* ------------------------------ 조립 ------------------------------ */
 
 /** 말풍선 하나를 <g> 마크업으로 만든다 (페이지 좌표 그대로) */
 export function bubbleMarkup(b: Bubble): string {
+  if (b.kind === 'sfx') return sfxMarkup(b);
   const shapes = geometry(b);
   const sw = Math.max(0, b.strokeWidth);
   const dash = b.kind === 'whisper' ? ` stroke-dasharray="${f(sw * 3.2)} ${f(sw * 2.6)}"` : '';
@@ -334,17 +639,37 @@ export function bubblesSvgDocument(bubbles: Bubble[], w: number, h: number): str
 
 /** 꼬리와 윤곽선을 포함한 경계 상자 */
 export function bubbleBounds(b: Bubble, pad = 0) {
+  if (b.kind === 'sfx') {
+    const st = sfxStyleOf(b);
+    const skew = Math.min(3, Math.abs(Math.tan((st.skew * Math.PI) / 180)));
+    const r = Math.hypot(b.w * (1 + skew), b.h) / 2 + (b.strokeWidth + st.stroke2Width) * 2 + st.extrude + st.motion * b.h * 0.2 + b.h * st.jitter * 0.3 + 24 + pad;
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    return { x: cx - r, y: cy - r, w: r * 2, h: r * 2 };
+  }
   const m = b.strokeWidth * 2 + 24 + pad;
-  const xs = [b.x, b.x + b.w, ...(b.tail ? [b.tailX] : [])];
-  const ys = [b.y, b.y + b.h, ...(b.tail ? [b.tailY] : [])];
+  const t2 = b.tail && b.tail2 ? b.tail2 : null;
+  const xs = [b.x, b.x + b.w, ...(b.tail ? [b.tailX] : []), ...(t2 ? [t2.x] : [])];
+  const ys = [b.y, b.y + b.h, ...(b.tail ? [b.tailY] : []), ...(t2 ? [t2.y] : [])];
   return { x: Math.min(...xs) - m, y: Math.min(...ys) - m, w: Math.max(...xs) - Math.min(...xs) + m * 2, h: Math.max(...ys) - Math.min(...ys) + m * 2 };
 }
 
 /** 글자 길이에 맞춰 크기를 자동으로 맞춘다 (중심과 꼬리 상대 위치 유지) */
 export function fitBubble(b: Bubble): Bubble {
+  if (b.kind === 'sfx') return fitSfx(b);
   const area = TEXT_AREA[b.kind];
+  if (b.vertical) {
+    const longest = Math.max(1, ...b.text.split('\n').map((l) => [...l].length));
+    const per = Math.min(longest, 12);
+    const h = Math.max(90, (per * b.fontSize * 1.06 + b.fontSize * 0.6) / area.h);
+    const cols = b.text.split('\n').reduce((n, l) => n + Math.max(1, Math.ceil([...l].length / per)), 0);
+    const w = Math.max(80, (cols * b.fontSize * 1.4 + b.fontSize * 0.4) / area.w);
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    return { ...b, x: cx - w / 2, y: cy - h / 2, w, h };
+  }
   const lh = b.fontSize * 1.32;
-  const target = b.kind === 'narration' ? 3.4 : b.kind === 'soft' ? 2.6 : 1.55;
+  const target = b.kind === 'narration' || b.kind === 'mono' ? 3.4 : b.kind === 'soft' || b.kind === 'box' ? 2.6 : 1.55;
   let best = { w: b.w, h: b.h, score: Infinity };
   for (let w = 110; w <= 520; w += 10) {
     const lines = wrapText(b.text, w * area.w, b.fontSize);
