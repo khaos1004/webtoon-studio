@@ -417,9 +417,16 @@ function LayerCanvas({ layer, total }: { layer: PageLayer; total: number }) {
   const b = layerBounds(layer, PAGE_WIDTH, total);
 
   useEffect(() => {
-    void preloadLayerImages([layer]);
-    return onLayerImageLoaded(() => bump((n) => n + 1));
-  }, [layer.src, layer]);
+  void preloadLayerImages([layer]);
+
+  const unsubscribe = onLayerImageLoaded(() => {
+    bump((n) => n + 1);
+  });
+
+  return () => {
+    unsubscribe();
+  };
+}, [layer.src, layer]);
 
   useEffect(() => {
     const cv = ref.current;
