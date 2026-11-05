@@ -7,6 +7,7 @@ import { PRESETS, PRESET_CATEGORIES, type Preset } from '@/lib/presets';
 import { BLEND_LABELS, KIND_LABELS, PATTERN_LABELS, SHAPE_LABELS } from '@/lib/pagelayers';
 import { BUBBLE_KINDS, BUBBLE_LABELS, bubbleBounds, bubbleMarkup, defaultBubble } from '@/lib/bubble';
 import { FontSelect } from './SfxPanel';
+import { DRAG_BUBBLE, DRAG_MAT, endPanelDrag, startPanelDrag } from '@/lib/dragkinds';
 
 /* ------------------------------ 공용 입력 ------------------------------ */
 
@@ -305,7 +306,15 @@ export function BubblePanel(p: BubblePanelProps) {
       <Section title="말풍선 추가">
         <div className="kindGrid">
           {BUBBLE_KINDS.map((k) => (
-            <button key={k} className="kindBtn" onClick={() => p.onAdd(k)} title={`${BUBBLE_LABELS[k]} 말풍선 추가`}>
+            <button
+              key={k}
+              className="kindBtn"
+              onClick={() => p.onAdd(k)}
+              draggable
+              onDragStart={(e) => startPanelDrag(e.nativeEvent, DRAG_BUBBLE, k, `${BUBBLE_LABELS[k]} 말풍선`, e.currentTarget.querySelector('svg'))}
+              onDragEnd={endPanelDrag}
+              title={`${BUBBLE_LABELS[k]} 말풍선 추가 · 화면으로 끌어다 놓으면 그 자리에 들어가요`}
+            >
               <KindThumb kind={k} />
               <span>{BUBBLE_LABELS[k]}</span>
             </button>
@@ -763,8 +772,6 @@ export interface MaterialPanelProps {
   onDelete: (id: string) => void;
 }
 
-/** 소재 목록에서 화면으로 끌어다 놓을 때 쓰는 데이터 종류 */
-export const MAT_DRAG = 'application/x-wls-material';
 
 const HINT_LABEL: Record<Material['hint'], string> = {
   alpha: '투명 배경 소재',
@@ -785,13 +792,13 @@ function MatGrid({ list, selId, onSelect, onPlace }: { list: Material[]; selId: 
           onDoubleClick={() => onPlace(m)}
           draggable
           onDragStart={(e) => {
-            e.dataTransfer.setData(MAT_DRAG, m.id);
-            e.dataTransfer.effectAllowed = 'copy';
+            startPanelDrag(e.nativeEvent, DRAG_MAT, m.id, m.name, e.currentTarget.querySelector('img'));
             onSelect(m.id);
           }}
-          title={`${m.name} · 두 번 클릭하면 화면에 놓여요 · 화면으로 끌어다 놓아도 돼요`}
+          onDragEnd={endPanelDrag}
+          title={`${m.name} · 웹툰 화면으로 끌어다 놓거나 두 번 클릭하면 붙어요`}
         >
-          <span className="matThumb">{/* eslint-disable-next-line @next/next/no-img-element */}<img src={m.thumb ?? m.src} alt={m.name} loading="lazy" decoding="async" /></span>
+          <span className="matThumb">{/* eslint-disable-next-line @next/next/no-img-element */}<img src={m.thumb ?? m.src} alt={m.name} loading="lazy" decoding="async" draggable={false} /></span>
           <span className="matName">{m.name}</span>
         </button>
       ))}
@@ -856,7 +863,7 @@ export function MaterialPanel(p: MaterialPanelProps) {
             <button className="iconBtn" title="선택 해제" onClick={() => p.onSelect(null)}>✕</button>
           </div>
         ) : (
-          p.materials.length > 0 && <p className="hint tip">소재를 누르면 넣기 버튼이 나와요. <b>두 번 클릭</b>하거나 <b>화면으로 끌어다 놓으면</b> 바로 놓여요.</p>
+          p.materials.length > 0 && <p className="hint tip">소재를 <b>웹툰 화면으로 끌어다 놓으면</b> 그 자리에 바로 붙어요. 두 번 클릭해도 돼요.</p>
         )}
         {p.materials.length === 0 && <p className="hint">아직 가져온 소재가 없어요.</p>}
         {mine.length > 0 && <h4 className="matHead">내가 가져온 소재 ({mine.length})</h4>}
