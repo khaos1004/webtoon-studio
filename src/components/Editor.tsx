@@ -510,12 +510,14 @@ export default function Editor() {
   };
 
   /* ---------- 배경 / 장식 레이어 ---------- */
-  const addLayer = (kind: PageLayerKind, patch: Partial<PageLayer> = {}) => {
+  /** keepTab: 소재를 연달아 놓을 수 있게 지금 탭을 그대로 둔다 */
+  const addLayer = (kind: PageLayerKind, patch: Partial<PageLayer> = {}, keepTab = false) => {
     const { total } = layoutCuts(projectRef.current);
     const l = createLayer(kind, total, patch);
     commit((p) => ({ ...p, layers: [...p.layers, l] }));
     setSelLayerId(l.id);
-    setTab('bg');
+    setSelBubbleId(null);
+    if (!keepTab) setTab('bg');
     setTool('select');
   };
 
@@ -643,8 +645,8 @@ export default function Editor() {
       fit: 'stretch',
       blend: m.hint === 'ink' ? 'multiply' : m.hint === 'light' ? 'screen' : 'normal',
       name: m.name.slice(0, 24),
-    });
-    say('소재를 놓았어요 · 끌어서 옮기고, 모서리로 크기, 위 동그라미로 회전해요');
+    }, true);
+    say('소재를 붙였어요 · 끌어서 옮기고, 모서리로 크기, 위 동그라미로 회전 · 더 끌어다 놓아도 돼요');
   };
 
   /** 화면 좌표 → 페이지 좌표 (소재를 끌어다 놓을 때) */

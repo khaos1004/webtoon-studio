@@ -20,7 +20,9 @@ export function startPanelDrag(e: DragEvent, type: string, data: string, name: s
   e.dataTransfer.setData(type, data);
   e.dataTransfer.effectAllowed = 'copy';
   label = name;
-  if (preview instanceof HTMLElement) {
+  // 아직 안 불러온 그림을 끌기 미리보기로 쓰면 끌기가 취소될 수 있어서, 다 불러온 그림만 쓴다
+  const ready = !(preview instanceof HTMLImageElement) || (preview.complete && preview.naturalWidth > 0);
+  if (preview instanceof HTMLElement && ready) {
     const r = preview.getBoundingClientRect();
     e.dataTransfer.setDragImage(preview, r.width / 2, r.height / 2);
   }

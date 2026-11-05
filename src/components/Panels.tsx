@@ -792,8 +792,8 @@ function MatGrid({ list, selId, onSelect, onPlace }: { list: Material[]; selId: 
           onDoubleClick={() => onPlace(m)}
           draggable
           onDragStart={(e) => {
+            // 끄는 도중에 선택을 바꾸면 위에 넣기 바가 생겨 목록이 밀리고, 브라우저가 끌기를 바로 취소해 버린다
             startPanelDrag(e.nativeEvent, DRAG_MAT, m.id, m.name, e.currentTarget.querySelector('img'));
-            onSelect(m.id);
           }}
           onDragEnd={endPanelDrag}
           title={`${m.name} · 웹툰 화면으로 끌어다 놓거나 두 번 클릭하면 붙어요`}
