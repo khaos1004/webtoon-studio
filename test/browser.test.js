@@ -31,7 +31,7 @@ const check = (name, ok, info = '') => {
   check('빈 화면이 뜬다', true);
 
   /* ---------- 1) 이미지 업로드 ---------- */
-  await page.setInputFiles('input[type=file][accept="image/*"]', path.join(OUT, '00-original.png'));
+  await page.setInputFiles('input[type=file][accept="image/*,.clip"]', path.join(OUT, '00-original.png'));
   await page.waitForSelector('.cutCanvas');
   await page.waitForTimeout(300);
   check('이미지가 컷으로 추가된다', (await page.locator('.cut').count()) === 1);
@@ -197,7 +197,7 @@ const check = (name, ok, info = '') => {
   /* ================= v1.1: 마술봉 · 프리셋 · 핸들 · 배경 ================= */
   await page.reload();
   await page.waitForSelector('.empty');
-  await page.setInputFiles('input[type=file][accept="image/*"][multiple]', path.join(OUT, '00-original.png'));
+  await page.setInputFiles('input[type=file][accept="image/*,.clip"][multiple]', path.join(OUT, '00-original.png'));
   await page.waitForSelector('.cutCanvas');
   await page.waitForTimeout(300);
   const orig2 = await snap();
@@ -263,7 +263,7 @@ const check = (name, ok, info = '') => {
 
   // 그림(이미지) 배경 레이어 올리기 + 화면에서 끌어 이동
   await page.click('.tabs button:has-text("배경")');
-  await page.setInputFiles('input[type=file][accept="image/*"]:not([multiple])', path.join(OUT, '00-original.png'));
+  await page.setInputFiles('input[type=file][accept="image/*,.clip"]:not([multiple])', path.join(OUT, '00-original.png'));
   await page.waitForSelector('.layerRow:has-text("00-original")');
   await page.waitForTimeout(500);
   check('그림 레이어가 추가된다', (await page.locator('.layerRow').count()) === 2);
@@ -282,7 +282,7 @@ const check = (name, ok, info = '') => {
   await sharp({ create: { width: 600, height: 400, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
     .composite([{ input: Buffer.from('<svg width="600" height="400"><circle cx="300" cy="200" r="120" fill="#e02040"/></svg>'), top: 0, left: 0 }])
     .png().toFile(tp);
-  await page.setInputFiles('input[type=file][accept="image/*"][multiple]', tp);
+  await page.setInputFiles('input[type=file][accept="image/*,.clip"][multiple]', tp);
   await page.waitForTimeout(600);
   await page.click('.tabs button:has-text("컷")');
   check('투명 PNG 컷은 “투명” 바탕으로 만들어진다', (await page.locator('select.text option[value="transparent"]:checked').count()) === 1 || (await page.locator('select.text').filter({ hasText: '투명' }).count()) >= 1);

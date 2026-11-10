@@ -11,7 +11,7 @@
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
     "typecheck": "tsc --noEmit",
-    "test:engine": "tsx test/engine.test.ts && tsx test/engine2.test.ts && tsx test/engine3.test.ts && tsx test/engine4.test.ts"
+    "test:engine": "tsx test/engine.test.ts && tsx test/engine2.test.ts && tsx test/engine3.test.ts && tsx test/engine4.test.ts && tsx test/clip.test.ts"
   },
   "dependencies": {
     "ag-psd": "latest",

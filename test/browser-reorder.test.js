@@ -27,7 +27,7 @@ const check = (n, ok, i = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${i
   await page.goto('file://' + path.join(OUT, 'web', 'index.html'));
   await page.waitForSelector('.empty');
   // 파일은 선택한 순서대로 추가된다 → R G B Y
-  await page.setInputFiles('input[type=file][accept="image/*"]', files);
+  await page.setInputFiles('input[type=file][accept="image/*,.clip"]', files);
   await page.waitForFunction(() => document.querySelectorAll('.cutCanvas').length === 4);
   await page.waitForTimeout(600);
   await page.click('.tabs button:has-text("컷")');

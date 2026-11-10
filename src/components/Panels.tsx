@@ -824,12 +824,13 @@ export function MaterialPanel(p: MaterialPanelProps) {
         >
           <button className="btn primary wide" onClick={p.onPick}>＋ 소재 파일 가져오기</button>
           <button className="btn wide" data-testid="sheet-pick" onClick={p.onPickSheet} title="효과음이 한 장에 모여 있는 그림을 한 개씩 자동으로 잘라 등록">✂ 효과음 시트 자르기…</button>
-          <span>PNG · JPG · WebP · SVG · PSD(합쳐진 이미지), 또는 이 파일들이 든 ZIP. 여러 개를 한 번에 올릴 수 있어요. 끌어다 놓아도 돼요.</span>
+          <span>PNG · JPG · WebP · SVG · PSD · 클립스튜디오 .clip(합쳐진 이미지), 또는 이 파일들이 든 ZIP. 여러 개를 한 번에 올릴 수 있어요. 끌어다 놓아도 돼요.</span>
         </div>
         <details className="note">
           <summary>클립스튜디오 소재는 어떻게 가져오나요?</summary>
           <p>
-            클립스튜디오 전용 형식(.lip · .sut · .clip · .cmc · 3D)은 직접 읽을 수 없어요. 클립스튜디오에서 소재를 캔버스에 붙이거나 열어서 <b>PNG로 내보내거나 PSD로 저장한 파일</b>을 올리면 돼요(PSD는 합쳐진 이미지 한 장으로 가져와요).
+            <b>.clip(클립스튜디오 원고 파일)</b>은 바로 올릴 수 있어요. 클립스튜디오가 파일에 함께 저장해 둔 <b>합쳐진 그림 한 장</b>으로 가져와요(레이어는 나뉘지 않아요). 그 그림이 원본보다 작게 저장돼 있으면 알려 드려요.
+            소재 전용 형식(.lip · .sut · .cmc · 3D)은 직접 읽을 수 없어요. 클립스튜디오에서 소재를 캔버스에 붙이거나 열어서 <b>PNG로 내보내거나 PSD로 저장한 파일</b>을 올리면 돼요(PSD도 합쳐진 이미지 한 장으로 가져와요).
             ASSETS에서 받은 소재가 PNG·JPG 이미지라면 그대로 올릴 수 있어요.
           </p>
           <p>

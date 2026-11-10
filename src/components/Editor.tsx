@@ -28,6 +28,7 @@ import { defaultBubble, defaultSfx, fitBubble } from '@/lib/bubble';
 import { applySfxPreset, presetById } from '@/lib/sfx';
 import { ensureFontsForBubbles } from '@/lib/fonts';
 import { fileToCut } from '@/lib/imageIO';
+import { clipToImageFile, expandClipFiles, isClipName } from '@/lib/clip';
 import { canvasToBlob, downloadBlob, ensureProjectMaterials, exportPsd, layoutCuts, parseProject, renderStrip, serializeProject } from '@/lib/project';
 import { ensureMaterialPixels, importMaterialFiles, loadBuiltinMaterials, loadLibrary, materialToPortable, removeFromLibrary, saveToLibrary } from '@/lib/materials';
 import { createSampleCut } from '@/lib/sample';
@@ -217,13 +218,17 @@ export default function Editor() {
   );
 
   const onFiles = async (files: FileList | File[]) => {
-    const list = Array.from(files).filter((f) => f.type.startsWith('image/'));
-    if (!list.length) return say('이미지 파일을 선택하세요');
+    const picked = Array.from(files).filter((f) => f.type.startsWith('image/') || isClipName(f.name));
+    if (!picked.length) return say('이미지 파일을 선택하세요');
     setBusy('이미지 불러오는 중…');
     try {
+      // 클립스튜디오(.clip)는 합쳐진 그림으로 바꿔서 넣는다
+      const { files: list, notes, errors } = await expandClipFiles(picked);
       const cuts: Cut[] = [];
       for (const f of list) cuts.push(await fileToCut(f));
-      addCuts(cuts);
+      if (cuts.length) addCuts(cuts);
+      const msg = [...errors, ...notes];
+      if (msg.length) say(msg.join(' · '));
     } catch (e) {
       say((e as Error).message);
     } finally {
@@ -529,9 +534,26 @@ export default function Editor() {
     if (selLayerId === id) setSelLayerId(null);
   };
 
-  const onLayerFile = async (file: File) => {
+  const pickSheet = async (f: File) => {
+    if (!isClipName(f.name)) return setSheetFile(f);
+    try {
+      const r = await clipToImageFile(f);
+      if (r.note) say(r.note);
+      setSheetFile(r.file);
+    } catch (e) {
+      say((e as Error).message);
+    }
+  };
+
+  const onLayerFile = async (picked: File) => {
     setBusy('그림 불러오는 중…');
     try {
+      let file = picked;
+      if (isClipName(picked.name)) {
+        const r = await clipToImageFile(picked);
+        file = r.file;
+        if (r.note) say(r.note);
+      }
       const img = await fileToLayerImage(file);
       const rid = replaceLayerId.current;
       replaceLayerId.current = null;
@@ -582,14 +604,14 @@ export default function Editor() {
     if (!files.length) return;
     setBusy('소재 가져오는 중…');
     try {
-      const { added, skipped } = await importMaterialFiles(files, (m) => setBusy(m));
+      const { added, skipped, notes } = await importMaterialFiles(files, (m) => setBusy(m));
       if (added.length) {
         setLibrary((l) => [...l, ...added]);
         void saveToLibrary(added);
         setSelMatId(added[added.length - 1].id);
         setTab('materials');
       }
-      say(added.length ? `소재 ${added.length}개를 가져왔어요${skipped.length ? ` · 건너뜀 ${skipped.length}개` : ''}` : `가져올 수 있는 소재가 없어요${skipped[0] ? ': ' + skipped[0] : ''}`);
+      say(added.length ? `소재 ${added.length}개를 가져왔어요${skipped.length ? ` · 건너뜀 ${skipped.length}개` : ''}${notes.length ? ' · ' + notes.join(' · ') : ''}` : `가져올 수 있는 소재가 없어요${skipped[0] ? ': ' + skipped[0] : ''}`);
     } catch (e) {
       say((e as Error).message);
     } finally {
@@ -1122,7 +1144,7 @@ export default function Editor() {
     const proj = files.find((f) => f.name.toLowerCase().endsWith('.wtoon'));
     if (proj) void loadProject(proj);
     else if (tab === 'materials') void importMaterials(files);
-    else if (files.some((f) => f.type.startsWith('image/'))) void onFiles(files);
+    else if (files.some((f) => f.type.startsWith('image/') || isClipName(f.name))) void onFiles(files);
     else say('이미지가 아닌 파일은 “소재” 탭에 놓아 주세요');
   };
 
@@ -1308,10 +1330,10 @@ export default function Editor() {
             { label: '새로 시작', hint: 'Ctrl+Z 로 되돌릴 수 있어요', onClick: newProject, disabled: !hasContent, danger: true, divider: true },
           ]}
         />
-        <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { if (e.target.files) void onFiles(e.target.files); e.target.value = ''; }} />
-        <input ref={matFileRef} type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.svg,.psd,.zip,image/*,application/zip" multiple hidden onChange={(e) => { if (e.target.files) void importMaterials(Array.from(e.target.files)); e.target.value = ''; }} />
-        <input ref={sheetFileRef} type="file" accept=".png,.jpg,.jpeg,.webp,.psd,image/*" hidden data-testid="sheet-input" onChange={(e) => { const f = e.target.files?.[0]; if (f) setSheetFile(f); e.target.value = ''; }} />
-        <input ref={layerFileRef} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void onLayerFile(f); e.target.value = ''; }} />
+        <input ref={fileRef} type="file" accept="image/*,.clip" multiple hidden onChange={(e) => { if (e.target.files) void onFiles(e.target.files); e.target.value = ''; }} />
+        <input ref={matFileRef} type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.svg,.psd,.clip,.zip,image/*,application/zip" multiple hidden onChange={(e) => { if (e.target.files) void importMaterials(Array.from(e.target.files)); e.target.value = ''; }} />
+        <input ref={sheetFileRef} type="file" accept=".png,.jpg,.jpeg,.webp,.psd,.clip,image/*" hidden data-testid="sheet-input" onChange={(e) => { const f = e.target.files?.[0]; if (f) void pickSheet(f); e.target.value = ''; }} />
+        <input ref={layerFileRef} type="file" accept="image/*,.clip" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void onLayerFile(f); e.target.value = ''; }} />
         <input ref={loadRef} type="file" accept=".wtoon,application/json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void loadProject(f); e.target.value = ''; }} />
       </header>
 

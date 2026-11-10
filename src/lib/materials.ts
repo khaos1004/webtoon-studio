@@ -8,6 +8,7 @@
  */
 import type { Material } from './types';
 import { uid } from './types';
+import { clipToImageFile, isClipName } from './clip';
 import type { RGBA } from './effects';
 
 /* ------------------------------ 픽셀 레지스트리 (워커 공용) ------------------------------ */
@@ -332,12 +333,15 @@ const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg
 export interface ImportResult {
   added: Material[];
   skipped: string[];
+  /** 가져왔지만 알려야 할 것(예: .clip 미리보기가 원본보다 작음) */
+  notes: string[];
 }
 
 /** 이미지·ZIP 파일들을 소재로 변환 */
 export async function importMaterialFiles(files: File[], onProgress?: (msg: string) => void): Promise<ImportResult> {
   const added: Material[] = [];
   const skipped: string[] = [];
+  const notes: string[] = [];
   for (const f of files) {
     const lower = f.name.toLowerCase();
     try {
@@ -354,6 +358,11 @@ export async function importMaterialFiles(files: File[], onProgress?: (msg: stri
             skipped.push(e.name);
           }
         }
+      } else if (isClipName(lower)) {
+        onProgress?.(`${f.name} 가져오는 중…`);
+        const r = await clipToImageFile(f);
+        added.push(await imageBlobToMaterial(r.file, f.name));
+        if (r.note) notes.push(r.note);
       } else if (lower.endsWith('.psd')) {
         onProgress?.(`${f.name} 가져오는 중…`);
         added.push(await psdToMaterial(await f.arrayBuffer(), f.name));
@@ -367,7 +376,7 @@ export async function importMaterialFiles(files: File[], onProgress?: (msg: stri
       skipped.push(`${f.name} (${(e as Error).message})`);
     }
   }
-  return { added, skipped };
+  return { added, skipped, notes };
 }
 
 /* ------------------------------ 내장 소재(public/materials) ------------------------------ */

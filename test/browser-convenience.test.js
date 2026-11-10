@@ -334,7 +334,7 @@ async function makePng(file, rgb, w = 900, h = 800) {
   // 이전 페이지의 자동저장이 남아 있으니 복구는 버린다
   await px.waitForSelector('.recoverBar', { timeout: 4000 }).catch(() => {});
   if (await px.locator('.recoverBar').count()) await px.click('.recoverBar button:has-text("버리기")');
-  await px.setInputFiles('input[type=file][accept="image/*"]', [pngs.R, pngs.G, pngs.B, pngs.Y]);
+  await px.setInputFiles('input[type=file][accept="image/*,.clip"]', [pngs.R, pngs.G, pngs.B, pngs.Y]);
   await px.waitForFunction(() => document.querySelectorAll('.cutCanvas').length === 4, null, { timeout: 15000 });
   await px.waitForTimeout(600);
   await px.click('.tabs button:has-text("말풍선")');

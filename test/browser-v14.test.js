@@ -24,7 +24,7 @@ const check = (n, ok, i = '') => {
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 const COLORS = { R: [220, 40, 40], G: [40, 190, 70], B: [50, 90, 230], Y: [240, 210, 40] };
-const MULTI = 'input[type=file][multiple][accept="image/*"]';
+const MULTI = 'input[type=file][multiple][accept="image/*,.clip"]';
 
 /** 모든 컷 위에서 아래 순서로 왼쪽 위 색을 글자로 읽는다 */
 const order = (page) =>

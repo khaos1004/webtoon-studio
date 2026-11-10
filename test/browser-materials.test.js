@@ -47,7 +47,7 @@ function zipBytes(files) {
   page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
   await page.goto(process.env.WTOON_URL || 'file://' + path.join(OUT, 'web', 'index.html'));
   await page.waitForSelector('.empty');
-  await page.setInputFiles('input[type=file][accept="image/*"]', path.join(OUT, '00-original.png'));
+  await page.setInputFiles('input[type=file][accept="image/*,.clip"]', path.join(OUT, '00-original.png'));
   await page.waitForSelector('.cutCanvas');
   await page.waitForTimeout(300);
   const snap = () => page.evaluate(() => { const c = document.querySelector('.cutCanvas'); return Array.from(c.getContext('2d').getImageData(0, 0, c.width, c.height).data); });
